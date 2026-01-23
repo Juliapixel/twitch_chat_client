@@ -1,0 +1,13 @@
+accounts = []
+chats = [
+    "forsen",
+    "vegas",
+    "pokelawls",
+    "theburntpeanut",
+    "julialuxel",
+    "xqc",
+    "potatbotat"
+]
+
+[ui]
+natural_scrolling = false

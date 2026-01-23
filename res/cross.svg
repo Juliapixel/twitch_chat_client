@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="16"
+   height="16"
+   viewBox="0 0 16 16"
+   version="1.1"
+   id="svg1"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1" />
+  <g
+     id="layer1">
+    <path
+       style="stroke-width:1.00157"
+       d="M 0,0 V 1.5 L 6.5,8 0,14.5 V 16 H 1.5 L 8,9.5 14.5,16 H 16 V 14.5 L 9.5,8 16,1.5 V 0 H 14.5 L 8,6.5 1.5,0 Z"
+       id="path2" />
+  </g>
+</svg>

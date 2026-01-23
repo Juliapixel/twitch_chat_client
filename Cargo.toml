@@ -1,0 +1,48 @@
+[package]
+name = "juliarino_iced"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+dirs = "6.0"
+env_logger = "0.11"
+futures = "0.3"
+hashbrown = "0.16"
+iced = { version = "0.14", features = ["tokio", "advanced", "svg", "image"] }
+iced_aw = "0.13.0"
+image = { version = "0.25", default-features = false, features = ["gif", "png", "webp", "avif", "jpeg"] }
+indexmap = "2.13"
+libc = "0.2"
+log = "0.4"
+md-5 = "0.10"
+mimalloc = "0.1"
+moka = { version = "0.12.12", features = ["future", "sync"] }
+open = "5.3"
+palette = "0.7"
+parking_lot = "0.12"
+reqwest = "0.13.1"
+rustls = { version = "0.23", features = ["log", "logging", "ring", "std", "tls12"], default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.149"
+toml = { version = "0.9.11", features = ["serde"] }
+
+[dependencies.twixel_core]
+git = "https://github.com/juliapixel/twixel_rs"
+branch = "feat/message-rework"
+# path = "../twixel_rs/twixel_core"
+features = ["connection", "rustls"]
+
+[profile.release]
+# lto = "fat"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[features]
+debug = ["iced/debug"]
