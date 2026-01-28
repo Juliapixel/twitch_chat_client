@@ -22,6 +22,23 @@
           inherit system;
           overlays = [ fenix.overlays.default ];
         };
+        ld_library_path = pkgs.lib.makeLibraryPath (
+          with pkgs;
+          [
+            expat
+            fontconfig
+            freetype
+            freetype.dev
+            libGL
+            pkg-config
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXrandr
+            wayland
+            libxkbcommon
+          ]
+        );
       in
       {
         devShells.default = pkgs.mkShell {
@@ -29,23 +46,7 @@
             pkgs.fenix.stable.toolchain
           ];
 
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
-            with pkgs;
-            [
-              expat
-              fontconfig
-              freetype
-              freetype.dev
-              libGL
-              pkg-config
-              xorg.libX11
-              xorg.libXcursor
-              xorg.libXi
-              xorg.libXrandr
-              wayland
-              libxkbcommon
-            ]
-          );
+          LD_LIBRARY_PATH = ld_library_path;
         };
 
         packages.default = pkgs.rustPlatform.buildRustPackage (
@@ -63,6 +64,14 @@
               lockFile = ./Cargo.lock;
               allowBuiltinFetchGit = true;
             };
+
+            nativeBuildInputs = with pkgs; [
+              makeWrapper
+            ];
+
+            postInstall = ''
+              wrapProgram $out/bin/${manifest.package.name} --set LD_LIBRARY_PATH ${ld_library_path}
+            '';
 
             meta = {
               description = "A native Twitch chat client written in Rust";
