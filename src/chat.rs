@@ -1,17 +1,23 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, ops::RangeInclusive, sync::Arc};
 
 use iced::{
     Alignment, Border, Color, Element, Length, Padding, Task,
     advanced::widget,
     alignment, mouse,
     widget::{
-        Container, Row, Text, button, column, container, mouse_area, opaque, row, rule, space, text::{self, Rich, Span}, text_input
+        Container, Row, Text, button, column, container, lazy, mouse_area, row, rule, space,
+        text::{Rich, Span},
+        text_input,
     },
 };
 use palette::{FromColor, IntoColor};
 use twixel_core::irc_message::{AnySemantic, PrivMsg, tags::OwnedTag};
 
-use crate::{platform::twitch::badges::BADGE_CACHE, widget::{draggable::Draggable, scrollie::scrollie}};
+use crate::{
+    IMAGE_GENERATION,
+    platform::twitch::{self, badges::BADGE_CACHE},
+    widget::{animated::AnimatedImage, scrollie::scrollie},
+};
 
 #[derive(Debug, Clone)]
 pub struct Chat {
@@ -56,13 +62,6 @@ impl Chat {
         .width(Length::Fill)
         .align_y(alignment::Vertical::Center);
 
-        // let chat =
-        //     keyed::Column::with_capacity(msgs.len()).extend(msgs.iter().map(|m| {
-        //         let mut hasher = md5::Md5::new();
-        //         hasher.update(m.inner());
-        //         (hasher.finalize(), view_message(m))
-        //     }));
-
         let message_box = text_input(&format!("Send message in {}", &self.channel), &self.message)
             .on_paste(Message::MessageChange)
             .on_input(Message::MessageChange)
@@ -72,36 +71,23 @@ impl Chat {
                 None
             });
 
-        // let usercard = self.usercard.as_ref().map(|user| {
-        //     opaque(Draggable::new(
-        //         container(
-        //             button(
-        //                 container(text::Text::new(user).style(text::danger))
-        //                     .style(container::rounded_box),
-        //             )
-        //             .on_press(Message::CloseUserCard),
-        //         )
-        //         .style(container::rounded_box)
-        //         .padding(Padding::new(16.0)),
-        //     ))
-        //     .explain([0.0, 1.0, 0.0, 0.5])
-        // });
+        let image_gen = IMAGE_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
 
-        iced::widget::stack!(
-            column![
-                header,
-                rule::horizontal(1).style(rule::weak),
-                iced::widget::stack!(
-                    scrollie(msgs.iter().map(|m| view_message(m)))
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .id(self.scroll_id.clone()),
-                    scroll_to_bottom()
-                ),
-                message_box
-            ],
-            // usercard,
-        )
+        column![
+            header,
+            rule::horizontal(1).style(rule::weak),
+            iced::widget::stack!(
+                scrollie(
+                    msgs.iter()
+                        .map(|m| (lazy((m.inner(), image_gen), |_| view_message(m)), m.clone()))
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .id(self.scroll_id.clone()),
+                scroll_to_bottom()
+            ),
+            message_box
+        ]
         .into()
     }
 
@@ -215,9 +201,27 @@ fn view_irc(msg: &AnySemantic) -> Option<Element<'_, Message>> {
 fn view_message(msg: &PrivMsg) -> Element<'static, Message> {
     let badges = msg
         .badges()
-        .filter_map(|(set, id)| BADGE_CACHE.get(&(set.to_owned(), id.to_owned())))
-        .map(|h| Element::new(iced::widget::image(h)))
-        .collect::<Vec<Element<_>>>();
+        .filter_map(|(set, id)| {
+            BADGE_CACHE
+                .get(&(set.to_owned(), id.to_owned()))
+                .and_then(|h| h.get()?.as_ref().ok().cloned())
+        })
+        .map(|h| Element::new(iced::widget::image(h.to_owned())))
+        .collect::<Row<Message>>()
+        .spacing(3);
+
+    let emotes = msg
+        .emotes()
+        .filter_map(|(e, ranges)| {
+            Some((
+                twitch::emotes::EMOTE_CACHE
+                    .get(e)
+                    .and_then(|h| h.get()?.as_ref().ok().cloned())?,
+                ranges,
+            ))
+        })
+        .map(|(h, r)| (h.to_owned(), r))
+        .collect::<Vec<(AnimatedImage, Vec<RangeInclusive<usize>>)>>();
 
     let username = msg
         .get_tag(OwnedTag::DisplayName)
@@ -232,23 +236,40 @@ fn view_message(msg: &PrivMsg) -> Element<'static, Message> {
         .into_components();
     let color = Color::from_rgb8(r, g, b);
 
+    let mut char_pos = 0;
+    let msg_col = if msg.is_me() { Some(color) } else { None };
+
+    let spans = msg.message_text().split(' ').map(|w| {
+        let word_chars = w.chars().count();
+        let elem = emotes
+            .iter()
+            .find(|e| {
+                e.1.iter()
+                    .any(|r| *r == (char_pos..=(char_pos + word_chars - 1)))
+            })
+            .map(|e| Element::new(e.0.clone()))
+            .unwrap_or_else(|| Text::new(w.to_owned()).color_maybe(msg_col).into());
+        char_pos += word_chars + 1;
+        elem
+    });
+
+    let spans = itertools::intersperse_with(spans, || Text::new(" ").into());
+
     let text = Rich::<_, Message>::with_spans([
+        Span::new(" "),
         Span::new(username.clone().into_owned())
             .color(color)
             .link(username.into_owned()),
         Span::new(": "),
-        Span::new(msg.message_text().to_owned()).color_maybe(if msg.is_me() {
-            Some(color)
-        } else {
-            None
-        }),
     ])
     .on_link_click(Message::ShowUserCard);
 
+    let line = [badges.into(), text.into()].into_iter().chain(spans);
+
     column![
-        Row::from_vec(badges),
-        Container::new(text).padding(Padding::default().vertical(4.0).horizontal(6.0)),
-        rule::horizontal(1)
+        Container::new(Row::from_iter(line).align_y(Alignment::End).wrap())
+            .padding(Padding::default().vertical(4.0).horizontal(6.0)),
+        rule::horizontal(1),
     ]
     .into()
 }

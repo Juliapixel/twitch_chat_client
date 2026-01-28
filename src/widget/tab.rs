@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, sync::LazyLock};
 
 use iced::{
     Background, Border, Color, Element, Event, Rectangle, Shadow, Size,
@@ -17,7 +17,10 @@ use iced::{
     widget::{Svg, svg},
 };
 
-const CROSS_SVG: &[u8] = include_bytes!("../../res/cross.svg");
+use crate::res;
+
+static CROSS_SVG: LazyLock<svg::Handle> =
+    LazyLock::new(|| svg::Handle::from_memory(res!("cross.svg")));
 
 pub struct Tab<TabId, M, T, R>
 where
@@ -30,6 +33,7 @@ where
     active: bool,
     on_click: Option<M>,
     on_double_click: Option<M>,
+    on_close: Option<M>,
 }
 
 impl<TabId, M, T, R> Tab<TabId, M, T, R>
@@ -40,7 +44,7 @@ where
     TabId: Display,
 {
     pub fn new(id: TabId) -> Self {
-        let close_button = Svg::new(svg::Handle::from_memory(CROSS_SVG))
+        let close_button = Svg::new(CROSS_SVG.clone())
             .width(10)
             .height(10)
             .style(|_, _| {
@@ -58,6 +62,7 @@ where
             active: false,
             on_click: None,
             on_double_click: None,
+            on_close: None,
         }
     }
 
@@ -68,6 +73,11 @@ where
 
     pub fn on_double_click(mut self, on_double_click: M) -> Self {
         self.on_double_click = Some(on_double_click);
+        self
+    }
+
+    pub fn on_close(mut self, on_close: M) -> Self {
+        self.on_close = Some(on_close);
         self
     }
 
@@ -287,7 +297,12 @@ where
             | Event::Touch(touch::Event::FingerPressed { .. }) => {
                 let Some(pos) = cursor.position() else { return };
 
-                if layout.bounds().contains(pos) {
+                if layout.child(1).bounds().contains(pos)
+                    && let Some(on_close) = &self.on_close
+                {
+                    shell.publish(on_close.clone());
+                    shell.capture_event();
+                } else if layout.bounds().contains(pos) {
                     let click = Click::new(pos, mouse::Button::Left, state.last_click);
 
                     if click.kind() == click::Kind::Double

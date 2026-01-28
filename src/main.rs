@@ -1,11 +1,7 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, atomic::AtomicU64};
 
 use futures::{SinkExt, Stream, StreamExt, channel::mpsc::UnboundedSender};
-use iced::{
-    Element, Subscription, Task, Theme, stream,
-    widget::{column, space},
-    window,
-};
+use iced::{Element, Subscription, Task, Theme, stream, widget::space, window};
 use indexmap::IndexMap;
 use twixel_core::{
     MessageBuilder,
@@ -17,9 +13,9 @@ use crate::{
     chat::Chat,
     config::CONFIG,
     config_ui::ConfigUi,
-    platform::twitch::badges::load_badge,
+    platform::twitch::{self, badges::load_badge},
     title_bar::TitleBar,
-    widget::{animated::AnimatedImage, tabs::Tabs},
+    widget::tabs::Tabs,
 };
 
 mod chat;
@@ -51,6 +47,7 @@ struct Juliarino {
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug)]
 enum Message {
+    ImageLoaded,
     IrcConnected(UnboundedSender<IrcCommand>),
     TabClosed(String),
     TabOpen(String),
@@ -60,8 +57,7 @@ enum Message {
     TitleBarMessage(title_bar::Message),
 }
 
-static IMG: LazyLock<AnimatedImage> =
-    LazyLock::new(|| AnimatedImage::from_bytes(res!("BOOBA.gif")).unwrap());
+static IMAGE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 impl Juliarino {
     fn new(channels: impl IntoIterator<Item = impl Into<String>>, main_window: window::Id) -> Self {
@@ -88,19 +84,27 @@ impl Juliarino {
                 let Some(chat) = self.channels.get_mut(chan) else {
                     return Task::none();
                 };
-                let badge_tasks: Task<Message> = priv_msg
+                let badge_tasks = priv_msg
                     .badges()
                     .map(|(set, id)| (set.to_owned(), id.to_owned()))
-                    .map(|(set, id)| {
-                        Task::future(async { load_badge(set, id).await }).discard::<Message>()
-                    })
-                    .reduce(|a, b| a.chain(b))
-                    .unwrap_or(Task::none());
+                    .map(|(set, id)| Task::future(async { load_badge(set, id).await }));
+
+                let emote_tasks = priv_msg
+                    .emotes()
+                    .map(|e| Task::future(twitch::emotes::load_emote(e.0.to_owned())));
+
                 if chat.messages.len() > 500 {
                     chat.messages.pop_front();
                 }
+                let task = Task::batch(badge_tasks.chain(emote_tasks)).then(|r| {
+                    if r {
+                        Task::done(Message::ImageLoaded)
+                    } else {
+                        Task::none()
+                    }
+                });
                 chat.messages.push_back(Arc::new(priv_msg));
-                return badge_tasks;
+                return task;
             }
             Message::TabClosed(tab) => {
                 let mut config = CONFIG.write();
@@ -144,6 +148,10 @@ impl Juliarino {
                 self.config.update(msg);
             }
             Message::TitleBarMessage(message) => return self.title_bar.update(message).discard(),
+            // Signaling messages
+            Message::ImageLoaded => {
+                IMAGE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         };
         Task::none()
     }
@@ -152,21 +160,21 @@ impl Juliarino {
         space().width(50.0).height(24.0);
 
         let tabs = self.channels.iter().map(|(c, chat)| {
-            (
-                c.clone(),
-                chat.view()
-                    .map(move |m| Message::ChatMessage(c.to_owned(), m)),
-            )
+            let span = iced::debug::time(format!("chat view ({c})"));
+            let view = chat
+                .view()
+                .map(move |m| Message::ChatMessage(c.to_owned(), m));
+            span.finish();
+            (c.clone(), view)
         });
         let tabs = Tabs::new(tabs)
             .on_close(Message::TabClosed)
             .fallback(self.config.view().map(Message::ConfigMessage));
 
-        column![
-            self.title_bar.view().map(Message::TitleBarMessage),
-            Element::from(tabs),
-        ]
-        .into()
+        // column![
+        //     self.title_bar.view().map(Message::TitleBarMessage),
+        //     ]
+        Element::from(tabs)
     }
 }
 
@@ -247,7 +255,7 @@ fn main() -> anyhow::Result<()> {
     iced::daemon(
         || {
             let (id, task) = iced::window::open(window::Settings {
-                decorations: false,
+                // decorations: false,
                 ..Default::default()
             });
             (

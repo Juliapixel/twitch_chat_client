@@ -1,0 +1,24 @@
+query GetEmoteSet($id: String!) {
+  users {
+    userByConnection(platform: TWITCH, platformId: $id) {
+      id
+      emoteSets {
+        id
+        emotes {
+          items {
+            alias
+            emote {
+              id
+              defaultName
+              images {
+                url
+                mime
+              }
+              aspectRatio
+            }
+          }
+        }
+      }
+    }
+  }
+}

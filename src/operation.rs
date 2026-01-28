@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use iced::{
     Task,
     advanced::widget::{Operation, operate},
@@ -6,13 +8,14 @@ use iced::{
 
 use crate::widget::scrollie;
 
-pub fn scroll_to_idx(id: Id, idx: usize) -> Task<()> {
-    struct ScrollToIdx {
+pub fn scroll_to_idx<K: PartialEq + Send + 'static>(id: Id, idx: usize) -> Task<()> {
+    struct ScrollToIdx<I> {
         id: Id,
         idx: usize,
+        _phantom: PhantomData<I>,
     }
 
-    impl Operation<()> for ScrollToIdx {
+    impl<I: PartialEq + Send + 'static> Operation<()> for ScrollToIdx<I> {
         fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<()>)) {
             operate(self)
         }
@@ -27,7 +30,7 @@ pub fn scroll_to_idx(id: Id, idx: usize) -> Task<()> {
                 return;
             }
 
-            let Some(state) = state.downcast_mut::<scrollie::State>() else {
+            let Some(state) = state.downcast_mut::<scrollie::State<I>>() else {
                 return;
             };
 
@@ -35,5 +38,9 @@ pub fn scroll_to_idx(id: Id, idx: usize) -> Task<()> {
         }
     }
 
-    operate(ScrollToIdx { id, idx })
+    operate(ScrollToIdx::<K> {
+        id,
+        idx,
+        _phantom: Default::default(),
+    })
 }

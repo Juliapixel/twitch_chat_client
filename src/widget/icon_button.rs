@@ -9,7 +9,6 @@ use iced::{
     },
     border::Radius,
     theme::{self, palette::Extended},
-    touch,
     widget::svg,
 };
 

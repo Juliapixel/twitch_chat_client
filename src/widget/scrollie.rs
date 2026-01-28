@@ -13,24 +13,26 @@ use iced::{
     window,
 };
 
-pub struct Scrollie<'a, M, T, R> {
+pub struct Scrollie<'a, M, T, R, K> {
     children: Vec<Element<'a, M, T, R>>,
+    keys: Vec<K>,
     id: Option<Id>,
     width: Length,
     height: Length,
     natural_scrolling: bool,
 }
 
-pub fn scrollie<'a, M, T, R>(
-    children: impl IntoIterator<Item = impl Into<Element<'a, M, T, R>>>,
-) -> Scrollie<'a, M, T, R> {
-    Scrollie::new(children.into_iter().map(Into::into).collect())
+pub fn scrollie<'a, M, T, R, K>(
+    children: impl IntoIterator<Item = (impl Into<Element<'a, M, T, R>>, K)>,
+) -> Scrollie<'a, M, T, R, K> {
+    children.into_iter().map(|(c, k)| (c.into(), k)).collect()
 }
 
-impl<'a, M, T, R> Scrollie<'a, M, T, R> {
-    pub fn new(children: Vec<Element<'a, M, T, R>>) -> Self {
+impl<'a, M, T, R, K> Scrollie<'a, M, T, R, K> {
+    pub fn new(children: Vec<Element<'a, M, T, R>>, keys: Vec<K>) -> Self {
         Self {
             children,
+            keys,
             id: None,
             width: Length::Shrink,
             height: Length::Shrink,
@@ -59,11 +61,19 @@ impl<'a, M, T, R> Scrollie<'a, M, T, R> {
     }
 }
 
+impl<'a, M, T, R, K> FromIterator<(Element<'a, M, T, R>, K)> for Scrollie<'a, M, T, R, K> {
+    fn from_iter<I: IntoIterator<Item = (Element<'a, M, T, R>, K)>>(iter: I) -> Self {
+        let (elems, keys) = iter.into_iter().unzip();
+        Self::new(elems, keys)
+    }
+}
+
 #[derive(Debug)]
-pub struct State {
+pub struct State<K> {
     pub bounds: Rectangle,
     pub content_bounds: Rectangle,
-    pub layouts: Vec<Rectangle>,
+    pub layouts: Vec<(Rectangle, K)>,
+    pub keys: Vec<K>,
     pub translation: f32,
     animation_state: AnimationState,
     last_frame: std::time::Instant,
@@ -75,14 +85,15 @@ enum AnimationState {
     Animating { start: f32, target: f32, lerp: f32 },
 }
 
-impl State {
+impl<K: PartialEq> State<K> {
     const SIGMA: f32 = 0.01;
 
-    fn new() -> Self {
+    fn new(keys: Vec<K>) -> Self {
         Self {
             bounds: Rectangle::with_size(Size::ZERO),
             content_bounds: Rectangle::with_size(Size::ZERO),
             layouts: Vec::new(),
+            keys,
             translation: 0.0,
             animation_state: AnimationState::None,
             last_frame: std::time::Instant::now(),
@@ -103,7 +114,7 @@ impl State {
 
     pub fn scroll_to_idx(&mut self, idx: usize) {
         if let Some(child) = self.layouts.get(idx) {
-            self.translation = child.y;
+            self.translation = child.0.y;
             self.clamp();
         }
     }
@@ -120,13 +131,14 @@ impl State {
         self.layouts
             .iter()
             .enumerate()
-            .find(|(_, l)| l.y >= self.translation && l.y + l.height > self.translation)
+            .find(|(_, (l, _))| l.y >= self.translation && l.y + l.height > self.translation)
             .map(|l| l.0)
     }
 }
 
-impl<'a, M, T, R> Widget<M, T, R> for Scrollie<'a, M, T, R>
+impl<'a, M, T, R, K> Widget<M, T, R> for Scrollie<'a, M, T, R, K>
 where
+    K: PartialEq + Clone + 'static,
     R: Renderer,
 {
     fn size(&self) -> Size<Length> {
@@ -137,8 +149,9 @@ where
     }
 
     fn layout(&mut self, tree: &mut Tree, renderer: &R, limits: &Limits) -> Node {
-        let state = tree.state.downcast_mut::<State>();
-        // let l = &limits.max_height(f32::INFINITY).loose();
+        let span = iced::debug::time("scrollie layout");
+
+        let state = tree.state.downcast_mut::<State<K>>();
         let l = limits.loose();
         let l = &Limits::with_compression(
             l.min(),
@@ -156,7 +169,11 @@ where
                 (c, b)
             },
         );
-        let layouts: Vec<Rectangle> = children.iter().map(|c| c.bounds()).collect();
+        let layouts: Vec<(Rectangle, K)> = children
+            .iter()
+            .map(|c| c.bounds())
+            .zip(self.keys.iter().cloned())
+            .collect();
         let node = Node::with_children(
             limits
                 .resolve(self.width, self.height, bounds.size())
@@ -168,16 +185,28 @@ where
         if was_at_bottom {
             state.translation = layouts
                 .iter()
+                .map(|l| &l.0)
                 .fold(Rectangle::with_size(Size::ZERO), |a, b| a.union(b))
                 .height
                 - node.bounds().height;
         } else if let Some(idx) = state.current_idx() {
-            let cur = state.layouts[idx];
-            state.translation = layouts[idx].y + (state.translation - cur.y)
+            let cur = &state.layouts[idx];
+            let (new_idx, _) = layouts
+                .iter()
+                .enumerate()
+                .find(|(_, (_, k))| k == &cur.1)
+                .unwrap_or((idx, cur));
+            let old_transl = state.translation;
+            state.translation = layouts[new_idx].0.y + (state.translation - cur.0.y);
+            if let AnimationState::Animating { start, target, .. } = &mut state.animation_state {
+                *start += state.translation - old_transl;
+                *target += state.translation - old_transl;
+            }
         }
         state.layouts = layouts;
         state.content_bounds = bounds;
         state.bounds = node.bounds();
+        span.finish();
         node
     }
 
@@ -191,7 +220,7 @@ where
         cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_ref::<State>();
+        let state = tree.state.downcast_ref::<State<K>>();
         let bounds = layout.bounds();
         renderer.with_layer(bounds, |r| {
             r.with_translation([0.0, -state.translation].into(), |r| {
@@ -233,11 +262,11 @@ where
     }
 
     fn tag(&self) -> Tag {
-        Tag::of::<State>()
+        Tag::of::<State<K>>()
     }
 
     fn state(&self) -> iced::advanced::widget::tree::State {
-        iced::advanced::widget::tree::State::new(State::new())
+        iced::advanced::widget::tree::State::new(State::<K>::new(self.keys.clone()))
     }
 
     fn children(&self) -> Vec<Tree> {
@@ -248,6 +277,32 @@ where
     }
 
     fn diff(&self, tree: &mut Tree) {
+        // let state = tree.state.downcast_mut::<State<K>>();
+
+        // let children = &mut tree.children;
+
+        // let Some(first) = self.keys.first() else {
+        //     tree.children = self.children();
+        //     return;
+        // };
+
+        // state.keys.iter().find(|k| *k == first);
+
+        // iced::advanced::widget::tree::diff_children_custom_with_search(
+        //     &mut tree.children,
+        //     &self.children,
+        //     |c, o| o.as_widget().diff(c),
+        //     |i| {
+        //         if let (Some(n), Some(o)) = (self.keys.get(i), state.keys.get(i)) {
+        //             o != n
+        //         } else {
+        //             true
+        //         }
+        //     },
+        //     |c| Tree::new(c.as_widget())
+        // );
+
+        // state.keys.clone_from(&self.keys);
         tree.diff_children(&self.children);
     }
 
@@ -258,7 +313,7 @@ where
         renderer: &R,
         operation: &mut dyn Operation,
     ) {
-        let state = tree.state.downcast_mut::<State>();
+        let state = tree.state.downcast_mut::<State<K>>();
 
         operation.scrollable(
             self.id.as_ref(),
@@ -296,7 +351,7 @@ where
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_mut::<State>();
+        let state = tree.state.downcast_mut::<State<K>>();
         let bounds = layout.bounds();
         for ((c, l), t) in self
             .children
@@ -417,7 +472,7 @@ where
         _viewport: &Rectangle,
         renderer: &R,
     ) -> mouse::Interaction {
-        let state = tree.state.downcast_ref::<State>();
+        let state = tree.state.downcast_ref::<State<K>>();
 
         let bounds = layout.bounds();
 
@@ -466,13 +521,10 @@ where
     }
 }
 
-impl Scrollable for State {
+impl<K: PartialEq> Scrollable for State<K> {
     fn snap_to(&mut self, offset: iced::widget::operation::RelativeOffset<Option<f32>>) {
         if let Some(y) = offset.y {
-            let bounds: Rectangle = self
-                .layouts
-                .iter()
-                .fold(Default::default(), |a, b| a.union(b));
+            let bounds = self.content_bounds;
             self.translation = (bounds.height * y).min(bounds.height).max(0.0);
             self.clamp();
         }
@@ -480,7 +532,7 @@ impl Scrollable for State {
 
     fn scroll_to(&mut self, offset: iced::widget::operation::AbsoluteOffset<Option<f32>>) {
         if let Some(y) = offset.y {
-            let height = self.layouts.iter().map(|i| i.height).sum();
+            let height = self.layouts.iter().map(|(i, _)| i.height).sum();
             self.translation = y.min(height).max(0.0);
             self.clamp();
         }
@@ -498,13 +550,14 @@ impl Scrollable for State {
     }
 }
 
-impl<'a, M, T, R> From<Scrollie<'a, M, T, R>> for Element<'a, M, T, R>
+impl<'a, M, T, R, K> From<Scrollie<'a, M, T, R, K>> for Element<'a, M, T, R>
 where
     M: 'a,
     T: 'a,
     R: Renderer + 'a,
+    K: Clone + PartialEq + 'static,
 {
-    fn from(value: Scrollie<'a, M, T, R>) -> Self {
+    fn from(value: Scrollie<'a, M, T, R, K>) -> Self {
         Element::new(value)
     }
 }

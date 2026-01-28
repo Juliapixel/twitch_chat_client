@@ -133,6 +133,7 @@ where
         renderer: &R,
         limits: &iced::advanced::layout::Limits,
     ) -> iced::advanced::layout::Node {
+        let span = iced::debug::time("tabs layout");
         let limits = limits.width(Length::Fill);
         let row_node = self.row.layout(
             &mut tree.children[0],
@@ -161,6 +162,7 @@ where
                 &limits,
             ));
         };
+        span.finish();
         Node::with_children(limits.max(), children)
     }
 

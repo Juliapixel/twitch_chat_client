@@ -30,6 +30,21 @@ pub enum AnimatedImageError {
     Image(image::ImageError),
 }
 
+impl std::fmt::Display for AnimatedImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnimatedImageError::UnknownFormat => write!(f, "Unknown image format"),
+            AnimatedImageError::UnsupportedFormat => write!(f, "Unsupported image format"),
+            AnimatedImageError::NotEnoughFrames => {
+                write!(f, "Not enough frames (needs at least 1)")
+            }
+            AnimatedImageError::Image(image_error) => image_error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for AnimatedImageError {}
+
 impl From<image::ImageError> for AnimatedImageError {
     fn from(value: image::ImageError) -> Self {
         Self::Image(value)
@@ -69,6 +84,28 @@ impl AnimatedImage {
             _ => Err(AnimatedImageError::UnsupportedFormat),
         }
     }
+
+    // pub fn from_frames(frames: Vec<Frame>) -> Result<Self, AnimatedImageError> {
+    //     let first: Frame = frames.next().ok_or(AnimatedImageError::NotEnoughFrames)??;
+    //     let iced::advanced::image::Handle::Rgba { width, height, .. } = first.handle else {
+    //         panic!("Expecint RGBA data frame")
+    //     };
+    //     let frames: Vec<Frame> = frames.filter_map(|f| f.ok()).collect();
+
+    //     let mut duration = first.delay;
+    //     duration = frames
+    //         .iter()
+    //         .map(|f| f.delay)
+    //         .fold(duration, |acc, b| acc + b);
+    //     Self {
+    //         first,
+    //         frames,
+    //         width: Length::Fixed(width as f32),
+    //         height: Length::Shrink,
+    //         duration,
+    //         aspect_ratio: width as f32 / height as f32,
+    //     }
+    // }
 
     fn from_animation_decoder<'a, D: image::AnimationDecoder<'a>>(
         dec: D,
@@ -159,14 +196,17 @@ where
         let state = tree.state.downcast_ref::<State>();
 
         let frame = match state.frame {
-            0 => &self.first.handle,
-            f => &self.frames[f - 1].handle,
+            0 => Some(&self.first.handle),
+            f => self.frames.get(f - 1).map(|f| &f.handle),
         };
-        renderer.draw_image(
-            iced::advanced::image::Image::new(frame),
-            layout.bounds(),
-            layout.bounds(),
-        );
+
+        if let Some(frame) = frame {
+            renderer.draw_image(
+                iced::advanced::image::Image::new(frame).snap(true),
+                layout.bounds(),
+                layout.bounds(),
+            );
+        }
     }
 
     fn size_hint(&self) -> Size<Length> {
@@ -211,7 +251,7 @@ where
     ) {
         static FIRST_FRAME: OnceLock<std::time::Instant> = OnceLock::new();
 
-        if !viewport.intersects(&layout.bounds()) {
+        if !viewport.intersects(&layout.bounds()) || self.frames.is_empty() {
             return;
         }
 
