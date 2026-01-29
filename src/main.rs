@@ -1,6 +1,8 @@
 use std::sync::{Arc, atomic::AtomicU64};
 
-use futures::{SinkExt, Stream, StreamExt, channel::mpsc::UnboundedSender};
+use futures::{
+    FutureExt, SinkExt, Stream, StreamExt, TryFutureExt, channel::mpsc::UnboundedSender,
+};
 use iced::{Element, Subscription, Task, Theme, stream, widget::space, window};
 use indexmap::IndexMap;
 use twixel_core::{
@@ -13,7 +15,10 @@ use crate::{
     chat::Chat,
     config::CONFIG,
     config_ui::ConfigUi,
-    platform::twitch::{self, badges::load_badge},
+    platform::{
+        seventv,
+        twitch::{self, badges::load_badge},
+    },
     title_bar::TitleBar,
     widget::tabs::Tabs,
 };
@@ -47,13 +52,22 @@ struct Juliarino {
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug)]
 enum Message {
+    /// A new image was loaded into cache (emote or badge)
     ImageLoaded,
     IrcConnected(UnboundedSender<IrcCommand>),
+    /// Close button on a tab was closed
     TabClosed(String),
+    /// A tab open request was made for the given channel
     TabOpen(String),
+    /// A channel has been successfully joined via IRC
+    ChannelJoined(String),
+    /// New message received over IRC
     NewMessage(PrivMsg),
+    /// Message for [chat::Chat]
     ChatMessage(String, chat::Message),
+    /// Message for [config_ui::ConfigUi]
     ConfigMessage(config_ui::Message),
+    /// Message for [title_bar::TitleBar]
     TitleBarMessage(title_bar::Message),
 }
 
@@ -84,6 +98,32 @@ impl Juliarino {
                 let Some(chat) = self.channels.get_mut(chan) else {
                     return Task::none();
                 };
+
+                let channels = seventv::CHANNELS.try_read();
+                let seventv_emotes = if let Ok(channels) = &channels {
+                    priv_msg
+                        .channel_id()
+                        .and_then(|id| channels.get(id))
+                        .and_then(|c| c.as_ref().ok())
+                } else {
+                    None
+                };
+
+                let seventv_emotes_task = if let Some(emotes) = seventv_emotes {
+                    Task::batch(
+                        priv_msg
+                            .message_text()
+                            .split(' ')
+                            .filter_map(|w| emotes.iter().find(|e| e.alias == w))
+                            .map(|e| {
+                                Task::future(seventv::load_emote(e.id, seventv::EmoteSize::OneX))
+                            }),
+                    )
+                } else {
+                    Task::none()
+                }
+                .discard();
+
                 let badge_tasks = priv_msg
                     .badges()
                     .map(|(set, id)| (set.to_owned(), id.to_owned()))
@@ -96,7 +136,12 @@ impl Juliarino {
                 if chat.messages.len() > 500 {
                     chat.messages.pop_front();
                 }
-                let task = Task::batch(badge_tasks.chain(emote_tasks)).then(|r| {
+                let task = Task::batch(
+                    badge_tasks
+                        .chain(emote_tasks)
+                        .chain(core::iter::once(seventv_emotes_task)),
+                )
+                .then(|r| {
                     if r {
                         Task::done(Message::ImageLoaded)
                     } else {
@@ -127,6 +172,20 @@ impl Juliarino {
                 if let Some(tx) = &self.irc_command {
                     tx.unbounded_send(IrcCommand::Join(tab)).unwrap();
                 }
+            }
+            Message::ChannelJoined(chan) => {
+                return Task::future(async move {
+                    let data =
+                        reqwest::get(format!("https://api.ivr.fi/v2/twitch/user?login={}", chan))
+                            .and_then(|r| r.json::<serde_json::Value>())
+                            .inspect_err(|e| log::error!("{e}"))
+                            .await;
+
+                    if let Some(id) = data.ok().as_ref().and_then(|d| d[0]["id"].as_str()) {
+                        seventv::load_channel_emote_set(id.to_owned()).await;
+                    }
+                })
+                .discard();
             }
             Message::ChatMessage(chat, msg) => {
                 let Some(chat_elem) = self.channels.get_mut(&chat) else {
@@ -193,6 +252,16 @@ fn twitch_worker() -> impl Stream<Item = Message> {
                         },
                         Some(Ok(AnySemantic::Ping(ping))) => {
                             conn.send(ping.respond().to_owned())
+                                .await
+                                .unwrap();
+                        },
+                        Some(Ok(AnySemantic::Join(join))) => {
+                            let Some(chan) = join.get_param(0) else {
+                                log::debug!("JOIN message without param??? {:?}", join.inner());
+                                continue;
+                            };
+
+                            output.send(Message::ChannelJoined(chan.trim_start_matches('#').to_owned()))
                                 .await
                                 .unwrap();
                         },

@@ -15,7 +15,10 @@ use twixel_core::irc_message::{AnySemantic, PrivMsg, tags::OwnedTag};
 
 use crate::{
     IMAGE_GENERATION,
-    platform::twitch::{self, badges::BADGE_CACHE},
+    platform::{
+        seventv,
+        twitch::{self, badges::BADGE_CACHE},
+    },
     widget::{animated::AnimatedImage, scrollie::scrollie},
 };
 
@@ -223,6 +226,12 @@ fn view_message(msg: &PrivMsg) -> Element<'static, Message> {
         .map(|(h, r)| (h.to_owned(), r))
         .collect::<Vec<(AnimatedImage, Vec<RangeInclusive<usize>>)>>();
 
+    let stv_emotes = seventv::CHANNELS.try_read().ok();
+    let stv_emotes = stv_emotes
+        .as_ref()
+        .and_then(|c| msg.channel_id().and_then(|id| c.get(id)))
+        .and_then(|e| e.as_ref().ok());
+
     let username = msg
         .get_tag(OwnedTag::DisplayName)
         .or_else(|| msg.get_username().map(Into::into))
@@ -248,6 +257,18 @@ fn view_message(msg: &PrivMsg) -> Element<'static, Message> {
                     .any(|r| *r == (char_pos..=(char_pos + word_chars - 1)))
             })
             .map(|e| Element::new(e.0.clone()))
+            .or_else(|| {
+                stv_emotes
+                    .map(|e| e.iter())
+                    .iter_mut()
+                    .flatten()
+                    .find(|e| e.alias == w)
+                    .and_then(|e| seventv::EMOTE_CACHE.get(&(e.id, seventv::EmoteSize::OneX)))
+                    .as_ref()
+                    .and_then(|e| e.get())
+                    .as_ref()
+                    .and_then(|e| e.as_ref().ok().map(|i| i.clone().into()))
+            })
             .unwrap_or_else(|| Text::new(w.to_owned()).color_maybe(msg_col).into());
         char_pos += word_chars + 1;
         elem

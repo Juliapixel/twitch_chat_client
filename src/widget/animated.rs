@@ -4,13 +4,12 @@ use iced::{
     Element, Event, Length, Rectangle, Size,
     advanced::{
         Layout, Widget,
-        graphics::text::cosmic_text::skrifa::raw::tables::layout,
         layout::{Limits, Node},
         widget::Tree,
     },
     window,
 };
-use image::{AnimationDecoder, GenericImageView};
+use image::GenericImageView;
 
 #[derive(Clone)]
 pub struct AnimatedImage {
@@ -79,7 +78,21 @@ impl AnimatedImage {
             }
             image::ImageFormat::WebP => {
                 let decoder = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(bytes))?;
-                Self::from_animation_decoder(decoder)
+                // WebPDecoder does not decode staic images through its AnimationDecoder impl (awesome)
+                if decoder.has_animation() {
+                    Self::from_animation_decoder(decoder)
+                } else {
+                    let img = image::load_from_memory_with_format(bytes, format)?;
+                    let (width, height) = img.dimensions();
+                    Ok(Self {
+                        first: img.into(),
+                        frames: Vec::new(),
+                        width: Length::Fixed(width as f32),
+                        height: Length::Shrink,
+                        duration: std::time::Duration::MAX,
+                        aspect_ratio: width as f32 / height as f32,
+                    })
+                }
             }
             _ => Err(AnimatedImageError::UnsupportedFormat),
         }

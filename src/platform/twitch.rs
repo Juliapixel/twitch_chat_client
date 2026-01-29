@@ -82,7 +82,7 @@ pub mod emotes {
     use moka::policy::EvictionPolicy;
     use tokio::sync::OnceCell;
 
-    use crate::widget::animated::AnimatedImage;
+    use crate::{platform::DECODER_SEMAPHORE, widget::animated::AnimatedImage};
 
     type EmoteCache = moka::sync::Cache<String, Arc<OnceCell<anyhow::Result<AnimatedImage>>>>;
 
@@ -95,7 +95,12 @@ pub mod emotes {
     });
 
     pub async fn load_emote(id: String) -> bool {
-        static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+        static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+            reqwest::ClientBuilder::new()
+                .timeout(Duration::from_secs(90))
+                .build()
+                .unwrap()
+        });
 
         let mut loaded = false;
 
@@ -113,7 +118,10 @@ pub mod emotes {
                     .bytes()
                     .await?;
 
-                let img = AnimatedImage::from_bytes(&data)?;
+                let img = {
+                    let _ = DECODER_SEMAPHORE.acquire().await.unwrap();
+                    tokio::task::spawn_blocking(move || AnimatedImage::from_bytes(&data)).await??
+                };
 
                 loaded = true;
 
