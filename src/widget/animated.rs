@@ -77,9 +77,10 @@ impl AnimatedImage {
                 Self::from_animation_decoder(decoder)
             }
             image::ImageFormat::WebP => {
-                let decoder = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(bytes))?;
+                let mut decoder = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(bytes))?;
                 // WebPDecoder does not decode staic images through its AnimationDecoder impl (awesome)
                 if decoder.has_animation() {
+                    decoder.set_background_color(image::Rgba([0;4]));
                     Self::from_animation_decoder(decoder)
                 } else {
                     let img = image::load_from_memory_with_format(bytes, format)?;
