@@ -109,7 +109,7 @@ pub async fn load_channel_emote_set(id: String) -> bool {
                     .json::<SevenTvUserQuery>()
                     .await?;
 
-                let emotes = req
+                let mut emotes = req
                     .emote_set
                     .emotes
                     .into_iter()
@@ -131,7 +131,9 @@ pub async fn load_channel_emote_set(id: String) -> bool {
                             id: e.id,
                         }
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
+
+                emotes.sort_unstable_by(|a, b| a.alias.cmp(&b.alias));
 
                 Ok(emotes)
             };

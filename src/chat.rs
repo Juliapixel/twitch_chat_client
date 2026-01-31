@@ -19,7 +19,10 @@ use crate::{
         seventv,
         twitch::{self, badges::BADGE_CACHE},
     },
-    widget::{animated::AnimatedImage, scrollie::scrollie},
+    widget::{
+        animated::AnimatedImage,
+        scrollie::{ScrollViewport, scrollie},
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -29,6 +32,8 @@ pub struct Chat {
     pub messages: VecDeque<Arc<PrivMsg>>,
     pub message: String,
     pub usercard: Option<String>,
+
+    show_scroll_to_bottom: bool,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -39,6 +44,7 @@ pub enum Message {
     CloseUserCard,
     ShowUserCard(String),
     ScrollToBottom,
+    ChatScrolled(ScrollViewport),
 }
 
 impl Chat {
@@ -49,6 +55,8 @@ impl Chat {
             messages: Default::default(),
             message: Default::default(),
             usercard: Default::default(),
+
+            show_scroll_to_bottom: false,
         }
     }
 
@@ -84,10 +92,15 @@ impl Chat {
                     msgs.iter()
                         .map(|m| (lazy((m.inner(), image_gen), |_| view_message(m)), m.clone()))
                 )
+                .on_scroll(Message::ChatScrolled)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .id(self.scroll_id.clone()),
-                scroll_to_bottom()
+                if self.show_scroll_to_bottom {
+                    scroll_to_bottom()
+                } else {
+                    space().into()
+                }
             ),
             message_box
         ]
@@ -104,6 +117,9 @@ impl Chat {
             Message::CloseUserCard => self.usercard = None,
             Message::ScrollToBottom => {
                 return iced::widget::operation::snap_to_end(self.scroll_id.clone());
+            }
+            Message::ChatScrolled(vp) => {
+                self.show_scroll_to_bottom = !vp.is_at_bottom();
             }
         };
         Task::none()
@@ -259,10 +275,11 @@ fn view_message(msg: &PrivMsg) -> Element<'static, Message> {
             .map(|e| Element::new(e.0.clone()))
             .or_else(|| {
                 stv_emotes
-                    .map(|e| e.iter())
-                    .iter_mut()
-                    .flatten()
-                    .find(|e| e.alias == w)
+                    .and_then(|e| {
+                        e.binary_search_by(|e| e.alias.as_str().cmp(w))
+                            .ok()
+                            .map(|i| &e[i])
+                    })
                     .and_then(|e| seventv::EMOTE_CACHE.get(&(e.id, seventv::EmoteSize::OneX)))
                     .as_ref()
                     .and_then(|e| e.get())

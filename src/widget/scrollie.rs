@@ -13,6 +13,27 @@ use iced::{
     window,
 };
 
+#[derive(Debug, Clone)]
+pub struct ScrollViewport {
+    pub translation: f32,
+    pub bounds: Rectangle,
+    pub content_bounds: Rectangle,
+}
+
+impl ScrollViewport {
+    const SIGMA: f32 = 0.01;
+
+    pub fn is_at_top(&self) -> bool {
+        self.translation < Self::SIGMA
+    }
+
+    pub fn is_at_bottom(&self) -> bool {
+        let edge = self.translation + self.bounds.height;
+        edge < self.content_bounds.height + Self::SIGMA
+            && edge > self.content_bounds.height - Self::SIGMA
+    }
+}
+
 pub struct Scrollie<'a, M, T, R, K> {
     children: Vec<Element<'a, M, T, R>>,
     keys: Vec<K>,
@@ -20,6 +41,7 @@ pub struct Scrollie<'a, M, T, R, K> {
     width: Length,
     height: Length,
     natural_scrolling: bool,
+    on_scroll: Option<Box<dyn Fn(ScrollViewport) -> M + 'a>>,
 }
 
 pub fn scrollie<'a, M, T, R, K>(
@@ -37,6 +59,7 @@ impl<'a, M, T, R, K> Scrollie<'a, M, T, R, K> {
             width: Length::Shrink,
             height: Length::Shrink,
             natural_scrolling: false,
+            on_scroll: None,
         }
     }
 
@@ -52,6 +75,11 @@ impl<'a, M, T, R, K> Scrollie<'a, M, T, R, K> {
 
     pub fn natural_scrolling(mut self, natural_scrolling: bool) -> Self {
         self.natural_scrolling = natural_scrolling;
+        self
+    }
+
+    pub fn on_scroll(mut self, on_scroll: impl Fn(ScrollViewport) -> M + 'a) -> Self {
+        self.on_scroll = Some(Box::new(on_scroll));
         self
     }
 
@@ -74,9 +102,11 @@ pub struct State<K> {
     pub content_bounds: Rectangle,
     pub layouts: Vec<(Rectangle, K)>,
     pub keys: Vec<K>,
-    pub translation: f32,
+    translation: f32,
     animation_state: AnimationState,
     last_frame: std::time::Instant,
+    /// Whether this was scrolled, either by scrolling or an operation and on_scroll should be called
+    scrolled: bool,
 }
 
 #[derive(Debug)]
@@ -97,6 +127,7 @@ impl<K: PartialEq> State<K> {
             translation: 0.0,
             animation_state: AnimationState::None,
             last_frame: std::time::Instant::now(),
+            scrolled: false,
         }
     }
 
@@ -113,9 +144,22 @@ impl<K: PartialEq> State<K> {
     }
 
     pub fn scroll_to_idx(&mut self, idx: usize) {
+        let prev_transl = self.translation;
         if let Some(child) = self.layouts.get(idx) {
             self.translation = child.0.y;
             self.clamp();
+            if self.translation != prev_transl {
+                self.scrolled = true;
+            }
+        }
+    }
+
+    pub fn scroll_to(&mut self, translation: f32) {
+        let prev_transl = self.translation;
+        self.translation = translation;
+        self.clamp();
+        if self.translation != prev_transl {
+            self.scrolled = true;
         }
     }
 
@@ -448,12 +492,18 @@ where
             {
                 *lerp += i.duration_since(state.last_frame).as_secs_f32() * 30.0;
                 *lerp = lerp.clamp(0.0, 1.0);
+                let prev_transl = state.translation;
                 state.translation = *start + (*lerp * (*target - *start));
 
                 if layout.bounds().intersects(viewport) {
                     shell.request_redraw();
                 }
+
                 state.clamp();
+
+                if state.translation != prev_transl {
+                    state.scrolled = true;
+                }
             }
             if let AnimationState::Animating { lerp, .. } = state.animation_state
                 && lerp >= 1.0
@@ -461,6 +511,17 @@ where
                 state.animation_state = AnimationState::None
             }
             state.last_frame = *i;
+        }
+
+        if state.scrolled {
+            state.scrolled = false;
+            if let Some(on_scroll) = &self.on_scroll {
+                shell.publish(on_scroll(ScrollViewport {
+                    translation: state.translation,
+                    bounds,
+                    content_bounds: state.content_bounds,
+                }))
+            }
         }
     }
 
@@ -550,16 +611,16 @@ impl<K: PartialEq> Scrollable for State<K> {
     fn snap_to(&mut self, offset: iced::widget::operation::RelativeOffset<Option<f32>>) {
         if let Some(y) = offset.y {
             let bounds = self.content_bounds;
-            self.translation = (bounds.height * y).min(bounds.height).max(0.0);
-            self.clamp();
+            self.animation_state = AnimationState::None;
+            self.scroll_to((bounds.height * y).min(bounds.height).max(0.0));
         }
     }
 
     fn scroll_to(&mut self, offset: iced::widget::operation::AbsoluteOffset<Option<f32>>) {
         if let Some(y) = offset.y {
             let height = self.layouts.iter().map(|(i, _)| i.height).sum();
-            self.translation = y.min(height).max(0.0);
-            self.clamp();
+            self.animation_state = AnimationState::None;
+            self.scroll_to(y.min(height).max(0.0));
         }
     }
 
@@ -569,9 +630,12 @@ impl<K: PartialEq> Scrollable for State<K> {
         bounds: Rectangle,
         content_bounds: Rectangle,
     ) {
-        self.translation = (offset.y + self.translation)
-            .min(content_bounds.height - bounds.height)
-            .max(0.0);
+        self.animation_state = AnimationState::None;
+        self.scroll_to(
+            (offset.y + self.translation)
+                .min(content_bounds.height - bounds.height)
+                .max(0.0),
+        );
     }
 }
 
