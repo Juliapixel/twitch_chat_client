@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, ops::RangeInclusive, sync::Arc};
+use std::{
+    collections::VecDeque,
+    ops::RangeInclusive,
+    sync::Arc,
+};
 
 use iced::{
     Alignment, Border, Color, Element, Length, Padding, Task,
@@ -29,7 +33,7 @@ use crate::{
 pub struct Chat {
     pub channel: String,
     scroll_id: widget::Id,
-    pub messages: VecDeque<Arc<PrivMsg>>,
+    pub messages: VecDeque<(Arc<PrivMsg>, u64)>,
     pub message: String,
     pub usercard: Option<String>,
 
@@ -88,9 +92,8 @@ impl Chat {
             header,
             rule::horizontal(1).style(rule::weak),
             iced::widget::stack!(
-                scrollie(msgs.iter().map(|m| {
-                    let key = Arc::as_ptr(m) as usize;
-                    (lazy((m.inner(), image_gen), |_| view_message(m)), key)
+                scrollie(msgs.iter().map(|(m, key)| {
+                    (lazy((m.inner(), image_gen), |_| view_message(m)), *key)
                 }))
                 .on_scroll(Message::ChatScrolled)
                 .width(Length::Fill)

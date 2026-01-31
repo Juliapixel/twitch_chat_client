@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use futures::{SinkExt, Stream, StreamExt, TryFutureExt, channel::mpsc::UnboundedSender};
 use iced::{
@@ -37,6 +40,8 @@ mod platform;
 mod title_bar;
 mod util;
 mod widget;
+
+static MESSAGE_KEY: AtomicU64 = AtomicU64::new(1);
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -155,7 +160,8 @@ impl Juliarino {
                         Task::none()
                     }
                 });
-                chat.messages.push_back(Arc::new(priv_msg));
+                let key = MESSAGE_KEY.fetch_add(1, Ordering::Relaxed);
+                chat.messages.push_back((Arc::new(priv_msg), key));
                 return task;
             }
             Message::TabClosed(tab) => {
