@@ -5311,7 +5311,7 @@ dependencies = [
 [[package]]
 name = "twixel_core"
 version = "0.1.0"
-source = "git+https://github.com/juliapixel/twixel_rs?branch=feat%2Fmessage-rework#fcc90b7149d3985d8a017fa3b1619c976a1494a6"
+source = "git+https://github.com/juliapixel/twixel_rs?branch=feat%2Fmessage-rework#1842d0c2762e279d6193748eaf83ea704ef72563"
 dependencies = [
  "bitflags 2.10.0",
  "either",

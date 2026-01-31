@@ -1,9 +1,11 @@
 use std::sync::{Arc, atomic::AtomicU64};
 
-use futures::{
-    FutureExt, SinkExt, Stream, StreamExt, TryFutureExt, channel::mpsc::UnboundedSender,
+use futures::{SinkExt, Stream, StreamExt, TryFutureExt, channel::mpsc::UnboundedSender};
+use iced::{
+    Alignment, Color, Element, Length, Subscription, Task, Theme, stream,
+    widget::{container, opaque, space},
+    window,
 };
-use iced::{Element, Subscription, Task, Theme, stream, widget::space, window};
 use indexmap::IndexMap;
 use twixel_core::{
     MessageBuilder,
@@ -13,8 +15,10 @@ use twixel_core::{
 
 use crate::{
     chat::Chat,
+    components::join_popup::{self, JoinPopup},
     config::CONFIG,
     config_ui::ConfigUi,
+    operation::switch_to_tab,
     platform::{
         seventv,
         twitch::{self, badges::load_badge},
@@ -25,6 +29,7 @@ use crate::{
 
 mod chat;
 mod cli;
+mod components;
 mod config;
 mod config_ui;
 mod operation;
@@ -43,6 +48,8 @@ enum IrcCommand {
 }
 
 struct Juliarino {
+    tabs_id: iced::widget::Id,
+    join_window: Option<JoinPopup>,
     channels: IndexMap<String, Chat>,
     config: ConfigUi,
     irc_command: Option<UnboundedSender<IrcCommand>>,
@@ -58,11 +65,16 @@ enum Message {
     /// Close button on a tab was closed
     TabClosed(String),
     /// A tab open request was made for the given channel
-    TabOpen(String),
+    OpenJoin,
+    CloseJoin,
+    /// Should add this tab
+    OpenTab(String),
     /// A channel has been successfully joined via IRC
     ChannelJoined(String),
     /// New message received over IRC
     NewMessage(PrivMsg),
+    /// Message for [components::join_popup::JoinPopup]
+    JoinPopupMessage(join_popup::Message),
     /// Message for [chat::Chat]
     ChatMessage(String, chat::Message),
     /// Message for [config_ui::ConfigUi]
@@ -83,6 +95,8 @@ impl Juliarino {
             })
             .collect();
         Self {
+            tabs_id: iced::widget::Id::unique(),
+            join_window: None,
             channels: chats,
             config: ConfigUi::new(),
             irc_command: None,
@@ -109,20 +123,13 @@ impl Juliarino {
                     None
                 };
 
-                let seventv_emotes_task = if let Some(emotes) = seventv_emotes {
-                    Task::batch(
-                        priv_msg
-                            .message_text()
-                            .split(' ')
-                            .filter_map(|w| emotes.iter().find(|e| e.alias == w))
-                            .map(|e| {
-                                Task::future(seventv::load_emote(e.id, seventv::EmoteSize::OneX))
-                            }),
-                    )
-                } else {
-                    Task::none()
-                }
-                .discard();
+                let seventv_emotes_task = seventv_emotes.map(|emotes| {
+                    priv_msg
+                        .message_text()
+                        .split(' ')
+                        .filter_map(|w| emotes.iter().find(|e| e.alias == w))
+                        .map(|e| Task::future(seventv::load_emote(e.id, seventv::EmoteSize::OneX)))
+                });
 
                 let badge_tasks = priv_msg
                     .badges()
@@ -139,7 +146,7 @@ impl Juliarino {
                 let task = Task::batch(
                     badge_tasks
                         .chain(emote_tasks)
-                        .chain(core::iter::once(seventv_emotes_task)),
+                        .chain(seventv_emotes_task.into_iter().flatten()),
                 )
                 .then(|r| {
                     if r {
@@ -162,7 +169,14 @@ impl Juliarino {
                     tx.unbounded_send(IrcCommand::Part(tab)).unwrap();
                 }
             }
-            Message::TabOpen(tab) => {
+            Message::OpenJoin => {
+                self.join_window = Some(JoinPopup::new());
+            }
+            Message::CloseJoin => {
+                self.join_window = None;
+            }
+            Message::OpenTab(tab) => {
+                let tab = tab.to_lowercase().trim().to_owned();
                 let mut config = CONFIG.write();
                 config.chats.push(tab.clone());
                 config.save().unwrap();
@@ -170,8 +184,10 @@ impl Juliarino {
 
                 self.channels.insert(tab.clone(), Chat::new(tab.clone()));
                 if let Some(tx) = &self.irc_command {
-                    tx.unbounded_send(IrcCommand::Join(tab)).unwrap();
+                    tx.unbounded_send(IrcCommand::Join(tab.clone())).unwrap();
                 }
+                self.join_window = None;
+                return switch_to_tab(self.tabs_id.clone(), tab).discard();
             }
             Message::ChannelJoined(chan) => {
                 return Task::future(async move {
@@ -186,6 +202,11 @@ impl Juliarino {
                     }
                 })
                 .discard();
+            }
+            Message::JoinPopupMessage(m) => {
+                if let Some(p) = &mut self.join_window {
+                    return p.update(m).discard();
+                }
             }
             Message::ChatMessage(chat, msg) => {
                 let Some(chat_elem) = self.channels.get_mut(&chat) else {
@@ -216,8 +237,6 @@ impl Juliarino {
     }
 
     fn view(&self, id: window::Id) -> Element<'_, Message> {
-        space().width(50.0).height(24.0);
-
         let tabs = self.channels.iter().map(|(c, chat)| {
             let span = iced::debug::time(format!("chat view ({c})"));
             let view = chat
@@ -227,13 +246,33 @@ impl Juliarino {
             (c.clone(), view)
         });
         let tabs = Tabs::new(tabs)
+            .id(self.tabs_id.clone())
             .on_close(Message::TabClosed)
+            .on_add(Message::OpenJoin)
             .fallback(self.config.view().map(Message::ConfigMessage));
 
-        // column![
-        //     self.title_bar.view().map(Message::TitleBarMessage),
-        //     ]
-        Element::from(tabs)
+        let popup: Element<'_, Message> = self
+            .join_window
+            .as_ref()
+            .map(|w| {
+                opaque(
+                    container(w.view().map(|m| match m {
+                        join_popup::Message::Submit => Message::OpenTab(w.value.clone()),
+                        join_popup::Message::Close => Message::CloseJoin,
+                        m => Message::JoinPopupMessage(m),
+                    }))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+                    .style(|_| {
+                        container::Style::default().background(Color::BLACK.scale_alpha(0.3))
+                    }),
+                )
+            })
+            .unwrap_or_else(|| space().into());
+
+        iced::widget::stack!(tabs, popup).into()
     }
 }
 
@@ -313,7 +352,7 @@ fn main() -> anyhow::Result<()> {
                 log::LevelFilter::Info
             },
         )
-        .default_format()
+        .parse_default_env()
         .init();
     log::info!("Logging started");
 

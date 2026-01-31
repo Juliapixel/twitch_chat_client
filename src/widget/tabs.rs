@@ -1,7 +1,7 @@
-use std::fmt::Display;
+use std::{fmt::Display, sync::LazyLock};
 
 use iced::{
-    Element, Event, Length, Rectangle, Size,
+    Alignment, Color, Element, Event, Length, Padding, Rectangle, Size,
     advanced::{
         Renderer, Widget,
         layout::Node,
@@ -9,13 +9,13 @@ use iced::{
         text::Renderer as TextRenderer,
         widget::{
             Tree,
-            tree::{State, Tag},
+            tree::{self, Tag},
         },
     },
     mouse::{self, Interaction},
     theme,
     widget::{
-        Row,
+        Id, Row,
         button::Catalog as ButtonCatalog,
         row::Wrapping,
         svg::{self, Catalog as SvgCatalog},
@@ -23,9 +23,15 @@ use iced::{
     },
 };
 
-use crate::widget::tab::Tab;
+use crate::{
+    res,
+    widget::{icon_button::IconButton, tab::Tab},
+};
+
+static ICON: LazyLock<svg::Handle> = LazyLock::new(|| svg::Handle::from_memory(res!("cross.svg")));
 
 pub struct Tabs<'a, M, T, R, TabId> {
+    id: Option<Id>,
     row: Wrapping<'a, M, T, R>,
     tabs: Vec<(TabId, Element<'a, M, T, R>)>,
     fallback: Option<Element<'a, M, T, R>>,
@@ -35,8 +41,14 @@ pub struct Tabs<'a, M, T, R, TabId> {
 }
 
 #[derive(Debug)]
-pub struct TabsState<TabId: Clone + Eq> {
+pub struct State<TabId: Clone + Eq> {
     selected: Option<TabId>,
+}
+
+impl<TabId: Clone + Eq> State<TabId> {
+    pub fn switch_to_tab(&mut self, tab: TabId) {
+        self.selected = Some(tab);
+    }
 }
 
 impl<'a, M, T, R, TabId> Tabs<'a, M, T, R, TabId>
@@ -44,17 +56,27 @@ where
     M: Clone + 'a,
     R: Renderer + TextRenderer + SvgRenderer + 'a,
     T: TextCatalog + ButtonCatalog + SvgCatalog + theme::Base + 'a,
-    <T as SvgCatalog>::Class<'static>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'static>>,
+    <T as SvgCatalog>::Class<'a>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'a>>,
     TabId: Clone + Eq + Display + 'a,
 {
     pub fn new(tabs: impl IntoIterator<Item = (TabId, impl Into<Element<'a, M, T, R>>)>) -> Self {
-        let mut row = Row::new().spacing(2).width(Length::Fill);
+        let mut row = Row::new()
+            .spacing(2)
+            .width(Length::Fill)
+            .align_y(Alignment::Center);
         let mut tabs_vec = Vec::<(TabId, Element<'a, M, T, R>)>::new();
         for c in tabs {
             row = row.push(Tab::new(c.0.clone()));
             tabs_vec.push((c.0, c.1.into()));
         }
+        row = row.push(
+            IconButton::new(svg::Svg::new(ICON.clone()))
+                .size(24)
+                .padding(Padding::new(7.0))
+                .color(Color::WHITE),
+        );
         Self {
+            id: None,
             row: row.wrap(),
             tabs: tabs_vec,
             fallback: None,
@@ -62,6 +84,11 @@ where
             on_close: None,
             on_reorder: None,
         }
+    }
+
+    pub fn id(mut self, id: Id) -> Self {
+        self.id = Some(id);
+        self
     }
 
     pub fn fallback(mut self, fallback: impl Into<Element<'a, M, T, R>>) -> Self {
@@ -85,10 +112,7 @@ where
     }
 
     #[allow(clippy::type_complexity)]
-    fn get_active(
-        &self,
-        state: &TabsState<TabId>,
-    ) -> Option<(usize, &(TabId, Element<'a, M, T, R>))> {
+    fn get_active(&self, state: &State<TabId>) -> Option<(usize, &(TabId, Element<'a, M, T, R>))> {
         if let Some(selected) = &state.selected {
             self.tabs.iter().enumerate().find(|t| selected == &t.1.0)
         } else {
@@ -99,7 +123,7 @@ where
     #[allow(clippy::type_complexity)]
     fn get_active_mut(
         &mut self,
-        state: &TabsState<TabId>,
+        state: &State<TabId>,
     ) -> Option<(usize, &mut (TabId, Element<'a, M, T, R>))> {
         if let Some(selected) = &state.selected {
             self.tabs
@@ -117,7 +141,7 @@ where
     M: Clone + 'a,
     R: Renderer + TextRenderer + SvgRenderer + 'a,
     T: TextCatalog + ButtonCatalog + SvgCatalog + theme::Base + 'a,
-    <T as SvgCatalog>::Class<'static>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'static>>,
+    <T as SvgCatalog>::Class<'a>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'a>>,
     TabId: Clone + Eq + Display + 'static,
 {
     fn size(&self) -> iced::Size<iced::Length> {
@@ -218,7 +242,7 @@ where
         shell: &mut iced::advanced::Shell<'_, M>,
         viewport: &iced::Rectangle,
     ) {
-        let state = tree.state.downcast_mut::<TabsState<TabId>>();
+        let state = tree.state.downcast_mut::<State<TabId>>();
         if (state.selected.is_none() && !self.tabs.is_empty())
             || !self
                 .tabs
@@ -242,7 +266,14 @@ where
                 .children()
                 .enumerate()
                 .find(|l| l.1.bounds().contains(pos))
-                .map(|b| (b.0, b.1.child(1).bounds().contains(pos)))
+                .map(|b| {
+                    (
+                        b.0,
+                        b.1.children()
+                            .nth(1)
+                            .is_some_and(|b| b.bounds().contains(pos)),
+                    )
+                })
         } else {
             None
         };
@@ -256,7 +287,7 @@ where
             } else if close && let Some(on_close) = &self.on_close {
                 shell.publish(on_close(self.tabs[idx].0.clone()));
                 shell.capture_event();
-            } else {
+            } else if idx < self.tabs.len() {
                 let new_selected = self.tabs[idx].0.clone();
 
                 if state.selected.as_ref().is_some_and(|s| s != &new_selected) {
@@ -318,13 +349,13 @@ where
     }
 
     fn state(&self) -> iced::advanced::widget::tree::State {
-        State::new(TabsState::<TabId> {
+        tree::State::new(State::<TabId> {
             selected: self.tabs.first().map(|f| f.0.clone()),
         })
     }
 
     fn tag(&self) -> iced::advanced::widget::tree::Tag {
-        Tag::of::<TabsState<TabId>>()
+        Tag::of::<State<TabId>>()
     }
 
     fn operate(
@@ -335,6 +366,13 @@ where
         operation: &mut dyn iced::advanced::widget::Operation,
     ) {
         operation.container(None, layout.bounds());
+
+        operation.custom(
+            self.id.as_ref(),
+            layout.bounds(),
+            tree.state.downcast_mut::<State<TabId>>(),
+        );
+
         operation.traverse(&mut |op| {
             self.row
                 .operate(&mut tree.children[0], layout.child(0), renderer, op);
@@ -392,13 +430,36 @@ where
         children.extend(self.tabs.iter().map(|t| Tree::new(t.1.as_widget())));
         children
     }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: iced::advanced::Layout<'b>,
+        renderer: &R,
+        viewport: &Rectangle,
+        translation: iced::Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, M, T, R>> {
+        if let Some(layout) = layout.children().nth(1) {
+            let offset = if self.fallback.is_some() { 2 } else { 1 };
+            if let Some((i, (_, active))) = self.get_active_mut(tree.state.downcast_ref()) {
+                let tree = &mut tree.children[i + offset];
+                active
+                    .as_widget_mut()
+                    .overlay(tree, layout, renderer, viewport, translation)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 impl<'a, M, T, R, TabId> From<Tabs<'a, M, T, R, TabId>> for Element<'a, M, T, R>
 where
     M: Clone + 'a,
     T: TextCatalog + ButtonCatalog + SvgCatalog + theme::Base + 'a,
-    <T as SvgCatalog>::Class<'static>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'static>>,
+    <T as SvgCatalog>::Class<'a>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'a>>,
     R: Renderer + TextRenderer + SvgRenderer + 'a,
     TabId: Clone + Eq + Display + 'static,
 {

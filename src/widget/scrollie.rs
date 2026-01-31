@@ -514,10 +514,35 @@ where
         tree: &'b mut Tree,
         layout: Layout<'b>,
         renderer: &R,
-        viewport: &Rectangle,
+        _viewport: &Rectangle,
         translation: iced::Vector,
     ) -> Option<overlay::Element<'b, M, T, R>> {
-        None
+        let state = tree.state.downcast_ref::<State<K>>();
+        let bounds = layout.bounds();
+        let viewport = &Rectangle {
+            x: bounds.x,
+            y: bounds.y + state.translation,
+            ..bounds
+        };
+
+        let translation = translation + [0.0, -state.translation].into();
+
+        let overlays: Vec<_> = self
+            .children
+            .iter_mut()
+            .zip(tree.children.iter_mut())
+            .zip(layout.children())
+            .filter_map(|((c, t), l)| {
+                c.as_widget_mut()
+                    .overlay(t, l, renderer, viewport, translation)
+            })
+            .collect();
+
+        if overlays.is_empty() {
+            None
+        } else {
+            Some(overlay::Group::with_children(overlays).into())
+        }
     }
 }
 

@@ -22,13 +22,13 @@ use crate::res;
 static CROSS_SVG: LazyLock<svg::Handle> =
     LazyLock::new(|| svg::Handle::from_memory(res!("cross.svg")));
 
-pub struct Tab<TabId, M, T, R>
+pub struct Tab<'a, TabId, M, T, R>
 where
     T: iced::widget::text::Catalog + svg::Catalog + theme::Base,
     R: text::Renderer + iced::advanced::svg::Renderer,
 {
     id: TabId,
-    cross: Svg<'static, T>,
+    cross: Svg<'a, T>,
     label: Text<'static, T, R>,
     active: bool,
     on_click: Option<M>,
@@ -36,10 +36,10 @@ where
     on_close: Option<M>,
 }
 
-impl<TabId, M, T, R> Tab<TabId, M, T, R>
+impl<'a, TabId, M, T, R> Tab<'a, TabId, M, T, R>
 where
     T: iced::widget::text::Catalog + svg::Catalog + theme::Base,
-    <T as svg::Catalog>::Class<'static>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'static>>,
+    <T as svg::Catalog>::Class<'a>: From<Box<dyn Fn(&T, svg::Status) -> svg::Style + 'a>>,
     R: text::Renderer + iced::advanced::svg::Renderer,
     TabId: Display,
 {
@@ -97,7 +97,7 @@ struct State {
     mouse_over: bool,
 }
 
-impl<M, T, R, TabId> Widget<M, T, R> for Tab<TabId, M, T, R>
+impl<'a, M, T, R, TabId> Widget<M, T, R> for Tab<'a, TabId, M, T, R>
 where
     M: Clone,
     T: theme::Base + iced::widget::text::Catalog + svg::Catalog,
@@ -350,14 +350,14 @@ where
     }
 }
 
-impl<'a, M, T, R, TabId> From<Tab<TabId, M, T, R>> for Element<'a, M, T, R>
+impl<'a, M, T, R, TabId> From<Tab<'a, TabId, M, T, R>> for Element<'a, M, T, R>
 where
     M: Clone + 'a,
     T: theme::Base + iced::widget::text::Catalog + svg::Catalog + 'a,
     R: Renderer + text::Renderer + iced::advanced::svg::Renderer + 'a,
     TabId: 'a,
 {
-    fn from(value: Tab<TabId, M, T, R>) -> Self {
+    fn from(value: Tab<'a, TabId, M, T, R>) -> Self {
         Element::new(value)
     }
 }
