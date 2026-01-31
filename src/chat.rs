@@ -88,10 +88,10 @@ impl Chat {
             header,
             rule::horizontal(1).style(rule::weak),
             iced::widget::stack!(
-                scrollie(
-                    msgs.iter()
-                        .map(|m| (lazy((m.inner(), image_gen), |_| view_message(m)), m.clone()))
-                )
+                scrollie(msgs.iter().map(|m| {
+                    let key = Arc::as_ptr(m) as usize;
+                    (lazy((m.inner(), image_gen), |_| view_message(m)), key)
+                }))
                 .on_scroll(Message::ChatScrolled)
                 .width(Length::Fill)
                 .height(Length::Fill)

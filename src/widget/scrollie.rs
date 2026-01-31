@@ -1,4 +1,6 @@
 use core::f32;
+use std::collections::HashMap;
+use std::hash::Hash;
 
 use iced::{
     Element, Event, Length, Rectangle, Size,
@@ -87,6 +89,39 @@ impl<'a, M, T, R, K> Scrollie<'a, M, T, R, K> {
         self.id = Some(id);
         self
     }
+}
+
+/// Reorders and diffs children using their keys so middle insertions or removals
+/// preserve the state of unaffected siblings.
+fn keyed_diff<K, W>(
+    tree_children: &mut Vec<Tree>,
+    keys: &mut Vec<K>,
+    new_children: &[W],
+    new_keys: &[K],
+    diff: impl Fn(&mut Tree, &W),
+    new_state: impl Fn(&W) -> Tree,
+) where
+    K: Eq + Hash + Clone,
+{
+    let old_children = std::mem::take(tree_children);
+    let old_keys = std::mem::take(keys);
+
+    let mut map: HashMap<K, Tree> = old_keys.into_iter().zip(old_children).collect();
+
+    tree_children.clear();
+    tree_children.reserve(new_children.len());
+
+    for (widget, key) in new_children.iter().zip(new_keys.iter()) {
+        if let Some(mut child_tree) = map.remove(key) {
+            diff(&mut child_tree, widget);
+            tree_children.push(child_tree);
+        } else {
+            tree_children.push(new_state(widget));
+        }
+    }
+
+    keys.clear();
+    keys.extend_from_slice(new_keys);
 }
 
 impl<'a, M, T, R, K> FromIterator<(Element<'a, M, T, R>, K)> for Scrollie<'a, M, T, R, K> {
@@ -182,7 +217,7 @@ impl<K: PartialEq> State<K> {
 
 impl<'a, M, T, R, K> Widget<M, T, R> for Scrollie<'a, M, T, R, K>
 where
-    K: PartialEq + Clone + 'static,
+    K: Eq + Hash + Clone + 'static,
     R: Renderer,
 {
     fn size(&self) -> Size<Length> {
@@ -321,33 +356,16 @@ where
     }
 
     fn diff(&self, tree: &mut Tree) {
-        // let state = tree.state.downcast_mut::<State<K>>();
+        let state = tree.state.downcast_mut::<State<K>>();
 
-        // let children = &mut tree.children;
-
-        // let Some(first) = self.keys.first() else {
-        //     tree.children = self.children();
-        //     return;
-        // };
-
-        // state.keys.iter().find(|k| *k == first);
-
-        // iced::advanced::widget::tree::diff_children_custom_with_search(
-        //     &mut tree.children,
-        //     &self.children,
-        //     |c, o| o.as_widget().diff(c),
-        //     |i| {
-        //         if let (Some(n), Some(o)) = (self.keys.get(i), state.keys.get(i)) {
-        //             o != n
-        //         } else {
-        //             true
-        //         }
-        //     },
-        //     |c| Tree::new(c.as_widget())
-        // );
-
-        // state.keys.clone_from(&self.keys);
-        tree.diff_children(&self.children);
+        keyed_diff(
+            &mut tree.children,
+            &mut state.keys,
+            &self.children,
+            &self.keys,
+            |child_tree, widget| widget.as_widget().diff(child_tree),
+            |widget| Tree::new(widget.as_widget()),
+        );
     }
 
     fn operate(
@@ -644,9 +662,139 @@ where
     M: 'a,
     T: 'a,
     R: Renderer + 'a,
-    K: Clone + PartialEq + 'static,
+    K: Clone + Eq + Hash + 'static,
 {
     fn from(value: Scrollie<'a, M, T, R, K>) -> Self {
         Element::new(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::advanced::widget::tree::{State as WidgetState, Tag};
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    enum Key {
+        A,
+        B,
+        C,
+        X,
+    }
+
+    struct MarkerA;
+    struct MarkerB;
+    struct MarkerC;
+    struct MarkerX;
+
+    impl Key {
+        fn tag(&self) -> Tag {
+            match self {
+                Key::A => Tag::of::<MarkerA>(),
+                Key::B => Tag::of::<MarkerB>(),
+                Key::C => Tag::of::<MarkerC>(),
+                Key::X => Tag::of::<MarkerX>(),
+            }
+        }
+    }
+
+    fn make_tree(key: &Key, label: &'static str) -> Tree {
+        Tree {
+            tag: key.tag(),
+            state: WidgetState::new(label.to_string()),
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn keyed_diff_preserves_state_after_middle_insertion() {
+        let mut children = vec![
+            make_tree(&Key::A, "old-A"),
+            make_tree(&Key::B, "old-B"),
+            make_tree(&Key::C, "old-C"),
+        ];
+        let mut keys = vec![Key::A, Key::B, Key::C];
+
+        let new_keys = vec![Key::A, Key::X, Key::B, Key::C];
+        let new_children = new_keys.clone();
+
+        keyed_diff(
+            &mut children,
+            &mut keys,
+            &new_children,
+            &new_keys,
+            |tree, key| {
+                if tree.tag != key.tag() {
+                    tree.tag = key.tag();
+                    tree.state = WidgetState::new(format!("rebuilt-{key:?}"));
+                }
+            },
+            |key| make_tree(key, "new"),
+        );
+
+        assert_eq!(children.len(), 4);
+        assert_eq!(keys, new_keys);
+
+        assert_eq!(children[0].state.downcast_ref::<String>(), "old-A");
+        assert_eq!(children[1].state.downcast_ref::<String>(), "new");
+        assert_eq!(children[2].state.downcast_ref::<String>(), "old-B");
+        assert_eq!(children[3].state.downcast_ref::<String>(), "old-C");
+    }
+
+    #[test]
+    fn keyed_diff_preserves_state_after_middle_removal() {
+        let mut children = vec![
+            make_tree(&Key::A, "old-A"),
+            make_tree(&Key::B, "old-B"),
+            make_tree(&Key::C, "old-C"),
+        ];
+        let mut keys = vec![Key::A, Key::B, Key::C];
+
+        let new_keys = vec![Key::A, Key::C];
+        let new_children = new_keys.clone();
+
+        keyed_diff(
+            &mut children,
+            &mut keys,
+            &new_children,
+            &new_keys,
+            |_, _| {},
+            |key| make_tree(key, "new"),
+        );
+
+        assert_eq!(children.len(), 2);
+        assert_eq!(keys, new_keys);
+
+        assert_eq!(children[0].state.downcast_ref::<String>(), "old-A");
+        assert_eq!(children[1].state.downcast_ref::<String>(), "old-C");
+    }
+
+    #[test]
+    fn keyed_diff_preserves_state_on_reorder() {
+        let mut children = vec![
+            make_tree(&Key::A, "old-A"),
+            make_tree(&Key::B, "old-B"),
+            make_tree(&Key::C, "old-C"),
+        ];
+        let mut keys = vec![Key::A, Key::B, Key::C];
+
+        let new_keys = vec![Key::A, Key::C, Key::B];
+        let new_children = new_keys.clone();
+
+        keyed_diff(
+            &mut children,
+            &mut keys,
+            &new_children,
+            &new_keys,
+            |_, _| {},
+            |key| make_tree(key, "new"),
+        );
+
+        assert_eq!(children.len(), 3);
+        assert_eq!(keys, new_keys);
+
+        assert_eq!(children[0].state.downcast_ref::<String>(), "old-A");
+        assert_eq!(children[1].state.downcast_ref::<String>(), "old-C");
+        assert_eq!(children[2].state.downcast_ref::<String>(), "old-B");
     }
 }

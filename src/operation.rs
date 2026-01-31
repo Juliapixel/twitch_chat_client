@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{hash::Hash, marker::PhantomData};
 
 use iced::{
     Task,
@@ -8,14 +8,14 @@ use iced::{
 
 use crate::widget::{scrollie, tabs};
 
-pub fn scroll_to_idx<K: PartialEq + Send + 'static>(id: Id, idx: usize) -> Task<()> {
+pub fn scroll_to_idx<K: Eq + Hash + Send + 'static>(id: Id, idx: usize) -> Task<()> {
     struct ScrollToIdx<I> {
         id: Id,
         idx: usize,
         _phantom: PhantomData<I>,
     }
 
-    impl<I: PartialEq + Send + 'static> Operation<()> for ScrollToIdx<I> {
+    impl<I: Eq + Hash + Send + 'static> Operation<()> for ScrollToIdx<I> {
         fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<()>)) {
             operate(self)
         }
