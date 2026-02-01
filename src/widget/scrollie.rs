@@ -285,6 +285,12 @@ where
         state.layouts = layouts;
         state.content_bounds = bounds;
         state.bounds = node.bounds();
+        state.clamp();
+        if let AnimationState::Animating { start, target, .. } = &mut state.animation_state {
+            let max = (state.content_bounds.height - state.bounds.height).max(0.0);
+            *start = start.min(max).max(0.0);
+            *target = target.min(max).max(0.0);
+        }
         span.finish();
         node
     }
