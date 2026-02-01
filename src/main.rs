@@ -132,7 +132,7 @@ impl Juliarino {
                     priv_msg
                         .message_text()
                         .split(' ')
-                        .filter_map(|w| emotes.iter().find(|e| e.alias == w))
+                        .filter_map(|w| emotes.binary_search_by(|e| e.alias.as_str().cmp(w)).ok().map(|i| &emotes[i]))
                         .map(|e| Task::future(seventv::load_emote(e.id, seventv::EmoteSize::OneX)))
                 });
 
@@ -310,7 +310,7 @@ fn twitch_worker() -> impl Stream<Item = Message> {
                                 .await
                                 .unwrap();
                         },
-                        Some(Ok(m)) => log::warn!("{}", m.inner().inner().trim()),
+                        Some(Ok(m)) => log::debug!("{}", m.inner().inner().trim()),
                         Some(Err(e)) => {
                             log::error!("{e}");
                             break;

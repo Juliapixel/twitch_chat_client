@@ -93,12 +93,12 @@ impl Chat {
             rule::horizontal(1).style(rule::weak),
             iced::widget::stack!(
                 scrollie(msgs.iter().map(|(m, key)| {
-                    (lazy((m.inner(), image_gen), |_| view_message(m)), *key)
+                    (lazy((key, image_gen), |_| view_message(m)), *key)
                 }))
-                .on_scroll(Message::ChatScrolled)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .id(self.scroll_id.clone()),
+                    .on_scroll(Message::ChatScrolled)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .id(self.scroll_id.clone()),
                 if self.show_scroll_to_bottom {
                     scroll_to_bottom()
                 } else {

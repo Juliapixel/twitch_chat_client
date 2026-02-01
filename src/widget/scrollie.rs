@@ -1,5 +1,5 @@
 use core::f32;
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 use std::hash::Hash;
 
 use iced::{
@@ -207,11 +207,32 @@ impl<K: PartialEq> State<K> {
     }
 
     fn current_idx(&self) -> Option<usize> {
-        self.layouts
-            .iter()
-            .enumerate()
-            .find(|(_, (l, _))| l.y >= self.translation && l.y + l.height > self.translation)
-            .map(|l| l.0)
+        let between = |a: Ordering, b: Ordering| {
+            match (a, b) {
+                (Ordering::Less, Ordering::Less) => Ordering::Less,
+                (Ordering::Less, Ordering::Equal) => Ordering::Equal,
+                (Ordering::Less, Ordering::Greater) => Ordering::Equal,
+                (Ordering::Equal, Ordering::Less) => unreachable!(),
+                (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
+                (Ordering::Equal, Ordering::Greater) => Ordering::Equal,
+                (Ordering::Greater, Ordering::Less) => unreachable!(),
+                (Ordering::Greater, Ordering::Equal) => unreachable!(),
+                (Ordering::Greater, Ordering::Greater) => Ordering::Greater,
+            }
+        };
+
+        if self.layouts.is_empty() {
+            return None
+        }
+
+        let seek = self.translation;
+        let idx = self.layouts.binary_search_by(|(b, _)| between(b.y.partial_cmp(&seek).unwrap(), (b.y + b.height).partial_cmp(&seek).unwrap())).unwrap_or_else(|x| x);
+
+        if idx < self.layouts.len() {
+            Some(idx)
+        } else {
+            None
+        }
     }
 }
 
@@ -561,6 +582,10 @@ where
 
         let bounds = layout.bounds();
 
+        if cursor.position_over(bounds).is_none() {
+            return mouse::Interaction::None;
+        }
+
         let cursor = match cursor {
             mouse::Cursor::Available(p) => {
                 mouse::Cursor::Available(p + [0.0, state.translation].into())
@@ -570,21 +595,30 @@ where
             }
             c => c,
         };
+
+        let viewport = Rectangle {
+            x: bounds.x,
+            y: bounds.y + state.translation,
+            ..bounds
+        };
+
         for ((c, l), t) in self
             .children
             .iter()
             .zip(layout.children())
             .zip(tree.children.iter())
         {
+            let bounds = l.bounds();
+            if bounds.y > viewport.y + viewport.height {
+                break;
+            } else if bounds.y + bounds.height < viewport.y {
+                continue;
+            }
             let inter = c.as_widget().mouse_interaction(
                 t,
                 l,
                 cursor,
-                &Rectangle {
-                    x: bounds.x,
-                    y: bounds.y + state.translation,
-                    ..bounds
-                },
+                &viewport,
                 renderer,
             );
             if !matches!(inter, mouse::Interaction::None) {
