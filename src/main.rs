@@ -23,7 +23,7 @@ use crate::{
     config_ui::ConfigUi,
     operation::switch_to_tab,
     platform::{
-        seventv,
+        seventv::{self, SevenTvClient},
         twitch::{self, badges::load_badge},
     },
     title_bar::TitleBar,
@@ -54,10 +54,13 @@ enum IrcCommand {
 
 struct Juliarino {
     tabs_id: iced::widget::Id,
+    irc_command: Option<UnboundedSender<IrcCommand>>,
+
+    seventv_client: Arc<SevenTvClient>,
+
     join_window: Option<JoinPopup>,
     channels: IndexMap<String, Chat>,
     config: ConfigUi,
-    irc_command: Option<UnboundedSender<IrcCommand>>,
     title_bar: TitleBar,
 }
 
@@ -66,6 +69,10 @@ struct Juliarino {
 enum Message {
     /// A new image was loaded into cache (emote or badge)
     ImageLoaded,
+    ChannelSevenTvDataLoaded {
+        login: String,
+        id: String,
+    },
     IrcConnected(UnboundedSender<IrcCommand>),
     /// Close button on a tab was closed
     TabClosed(String),
@@ -102,6 +109,7 @@ impl Juliarino {
         Self {
             tabs_id: iced::widget::Id::unique(),
             join_window: None,
+            seventv_client: Arc::new(SevenTvClient::new()),
             channels: chats,
             config: ConfigUi::new(),
             irc_command: None,
@@ -118,23 +126,26 @@ impl Juliarino {
                     return Task::none();
                 };
 
-                let channels = seventv::CHANNELS.try_read();
-                let seventv_emotes = if let Ok(channels) = &channels {
-                    priv_msg
-                        .channel_id()
-                        .and_then(|id| channels.get(id))
-                        .and_then(|c| c.as_ref().ok())
+                let seventv_emotes = if let Some(id) = priv_msg.channel_id() {
+                    self.seventv_client.try_channel_emote_set(id)
                 } else {
                     None
-                };
+                }
+                .unwrap_or_default();
 
-                let seventv_emotes_task = seventv_emotes.map(|emotes| {
-                    priv_msg
-                        .message_text()
-                        .split(' ')
-                        .filter_map(|w| emotes.binary_search_by(|e| e.alias.as_str().cmp(w)).ok().map(|i| &emotes[i]))
-                        .map(|e| Task::future(seventv::load_emote(e.id, seventv::EmoteSize::OneX)))
-                });
+                let p = &priv_msg;
+
+                let seventv_emotes_task = p
+                    .message_text()
+                    .split(' ')
+                    .filter_map(|w| {
+                        seventv_emotes
+                            .binary_search_by(|e| e.text_name().cmp(w))
+                            .ok()
+                            .map(|i| seventv_emotes[i].image.clone())
+                    })
+                    .filter(|i| i.try_get().is_none())
+                    .map(|e| Task::future(async move { e.get_unpin().await.is_ok() }));
 
                 let badge_tasks = priv_msg
                     .badges()
@@ -148,18 +159,14 @@ impl Juliarino {
                 if chat.messages.len() > 500 {
                     chat.messages.pop_front();
                 }
-                let task = Task::batch(
-                    badge_tasks
-                        .chain(emote_tasks)
-                        .chain(seventv_emotes_task.into_iter().flatten()),
-                )
-                .then(|r| {
-                    if r {
-                        Task::done(Message::ImageLoaded)
-                    } else {
-                        Task::none()
-                    }
-                });
+                let task = Task::batch(badge_tasks.chain(emote_tasks).chain(seventv_emotes_task))
+                    .then(|r| {
+                        if r {
+                            Task::done(Message::ImageLoaded)
+                        } else {
+                            Task::none()
+                        }
+                    });
                 let key = MESSAGE_KEY.fetch_add(1, Ordering::Relaxed);
                 chat.messages.push_back((Arc::new(priv_msg), key));
                 return task;
@@ -196,18 +203,31 @@ impl Juliarino {
                 return switch_to_tab(self.tabs_id.clone(), tab).discard();
             }
             Message::ChannelJoined(chan) => {
+                let stv = self.seventv_client.clone();
                 return Task::future(async move {
                     let data =
-                        reqwest::get(format!("https://api.ivr.fi/v2/twitch/user?login={}", chan))
+                        reqwest::get(format!("https://api.ivr.fi/v2/twitch/user?login={}", &chan))
                             .and_then(|r| r.json::<serde_json::Value>())
                             .inspect_err(|e| log::error!("{e}"))
                             .await;
 
                     if let Some(id) = data.ok().as_ref().and_then(|d| d[0]["id"].as_str()) {
-                        seventv::load_channel_emote_set(id.to_owned()).await;
+                        (
+                            chan,
+                            id.to_owned(),
+                            stv.load_channel_emote_set(id.to_owned()).await,
+                        )
+                    } else {
+                        (chan, "".into(), false)
                     }
                 })
-                .discard();
+                .then(|(c, id, f)| {
+                    if f {
+                        Task::done(Message::ChannelSevenTvDataLoaded { login: c, id })
+                    } else {
+                        Task::none()
+                    }
+                });
             }
             Message::JoinPopupMessage(m) => {
                 if let Some(p) = &mut self.join_window {
@@ -234,6 +254,15 @@ impl Juliarino {
                 self.config.update(msg);
             }
             Message::TitleBarMessage(message) => return self.title_bar.update(message).discard(),
+            Message::ChannelSevenTvDataLoaded { login, id } => {
+                if let (Some(chan), Some(emotes)) = (
+                    self.channels.get_mut(&login),
+                    self.seventv_client.channel_emote_set(&id),
+                ) {
+                    chan.emotes
+                        .extend(emotes.iter().map(|e| (e.text_name().to_owned(), e.clone())));
+                }
+            }
             // Signaling messages
             Message::ImageLoaded => {
                 IMAGE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

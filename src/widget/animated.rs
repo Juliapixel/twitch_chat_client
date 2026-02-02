@@ -11,7 +11,7 @@ use iced::{
 };
 use image::GenericImageView;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AnimatedImage {
     first: Frame,
     frames: Vec<Frame>,
@@ -50,7 +50,7 @@ impl From<image::ImageError> for AnimatedImageError {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Frame {
     delay: std::time::Duration,
     handle: iced::advanced::image::Handle,

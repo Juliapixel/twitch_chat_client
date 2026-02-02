@@ -1,6 +1,6 @@
 use core::f32;
-use std::{cmp::Ordering, collections::HashMap};
 use std::hash::Hash;
+use std::{cmp::Ordering, collections::HashMap};
 
 use iced::{
     Element, Event, Length, Rectangle, Size,
@@ -207,26 +207,32 @@ impl<K: PartialEq> State<K> {
     }
 
     fn current_idx(&self) -> Option<usize> {
-        let between = |a: Ordering, b: Ordering| {
-            match (a, b) {
-                (Ordering::Less, Ordering::Less) => Ordering::Less,
-                (Ordering::Less, Ordering::Equal) => Ordering::Equal,
-                (Ordering::Less, Ordering::Greater) => Ordering::Equal,
-                (Ordering::Equal, Ordering::Less) => unreachable!(),
-                (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
-                (Ordering::Equal, Ordering::Greater) => Ordering::Equal,
-                (Ordering::Greater, Ordering::Less) => unreachable!(),
-                (Ordering::Greater, Ordering::Equal) => unreachable!(),
-                (Ordering::Greater, Ordering::Greater) => Ordering::Greater,
-            }
+        let between = |a: Ordering, b: Ordering| match (a, b) {
+            (Ordering::Less, Ordering::Less) => Ordering::Less,
+            (Ordering::Less, Ordering::Equal) => Ordering::Equal,
+            (Ordering::Less, Ordering::Greater) => Ordering::Equal,
+            (Ordering::Equal, Ordering::Less) => unreachable!(),
+            (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
+            (Ordering::Equal, Ordering::Greater) => Ordering::Equal,
+            (Ordering::Greater, Ordering::Less) => unreachable!(),
+            (Ordering::Greater, Ordering::Equal) => unreachable!(),
+            (Ordering::Greater, Ordering::Greater) => Ordering::Greater,
         };
 
         if self.layouts.is_empty() {
-            return None
+            return None;
         }
 
         let seek = self.translation;
-        let idx = self.layouts.binary_search_by(|(b, _)| between(b.y.partial_cmp(&seek).unwrap(), (b.y + b.height).partial_cmp(&seek).unwrap())).unwrap_or_else(|x| x);
+        let idx = self
+            .layouts
+            .binary_search_by(|(b, _)| {
+                between(
+                    b.y.partial_cmp(&seek).unwrap(),
+                    (b.y + b.height).partial_cmp(&seek).unwrap(),
+                )
+            })
+            .unwrap_or_else(|x| x);
 
         if idx < self.layouts.len() {
             Some(idx)
@@ -614,13 +620,9 @@ where
             } else if bounds.y + bounds.height < viewport.y {
                 continue;
             }
-            let inter = c.as_widget().mouse_interaction(
-                t,
-                l,
-                cursor,
-                &viewport,
-                renderer,
-            );
+            let inter = c
+                .as_widget()
+                .mouse_interaction(t, l, cursor, &viewport, renderer);
             if !matches!(inter, mouse::Interaction::None) {
                 return inter;
             }

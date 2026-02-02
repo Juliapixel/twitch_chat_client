@@ -1,9 +1,6 @@
-use std::{
-    collections::VecDeque,
-    ops::RangeInclusive,
-    sync::Arc,
-};
+use std::{collections::VecDeque, ops::RangeInclusive, sync::Arc};
 
+use hashbrown::HashMap;
 use iced::{
     Alignment, Border, Color, Element, Length, Padding, Task,
     advanced::widget,
@@ -20,7 +17,7 @@ use twixel_core::irc_message::{AnySemantic, PrivMsg, tags::OwnedTag};
 use crate::{
     IMAGE_GENERATION,
     platform::{
-        seventv,
+        ChannelEmote,
         twitch::{self, badges::BADGE_CACHE},
     },
     widget::{
@@ -36,6 +33,8 @@ pub struct Chat {
     pub messages: VecDeque<(Arc<PrivMsg>, u64)>,
     pub message: String,
     pub usercard: Option<String>,
+
+    pub emotes: HashMap<String, ChannelEmote>,
 
     show_scroll_to_bottom: bool,
 }
@@ -60,11 +59,13 @@ impl Chat {
             message: Default::default(),
             usercard: Default::default(),
 
+            emotes: Default::default(),
+
             show_scroll_to_bottom: false,
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view<'a>(&'a self) -> Element<'a, Message> {
         let msgs = &self.messages;
 
         let header = row([
@@ -92,13 +93,15 @@ impl Chat {
             header,
             rule::horizontal(1).style(rule::weak),
             iced::widget::stack!(
-                scrollie(msgs.iter().map(|(m, key)| {
-                    (lazy((key, image_gen), |_| view_message(m)), *key)
-                }))
-                    .on_scroll(Message::ChatScrolled)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .id(self.scroll_id.clone()),
+                scrollie(
+                    msgs.iter().map(|(m, key)| {
+                        (lazy((key, image_gen), |_| self.view_message(m)), *key)
+                    })
+                )
+                .on_scroll(Message::ChatScrolled)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .id(self.scroll_id.clone()),
                 if self.show_scroll_to_bottom {
                     scroll_to_bottom()
                 } else {
@@ -126,6 +129,83 @@ impl Chat {
             }
         };
         Task::none()
+    }
+
+    fn view_message(&self, msg: &PrivMsg) -> Element<'static, Message> {
+        let badges = msg
+            .badges()
+            .filter_map(|(set, id)| {
+                BADGE_CACHE
+                    .get(&(set.to_owned(), id.to_owned()))
+                    .and_then(|h| h.get()?.as_ref().ok().cloned())
+            })
+            .map(|h| Element::new(iced::widget::image(h.to_owned())))
+            .collect::<Row<Message>>()
+            .spacing(3);
+
+        let emotes = msg
+            .emotes()
+            .filter_map(|(e, ranges)| {
+                Some((
+                    twitch::emotes::EMOTE_CACHE
+                        .get(e)
+                        .and_then(|h| h.get()?.as_ref().ok().cloned())?,
+                    ranges,
+                ))
+            })
+            .map(|(h, r)| (h.to_owned(), r))
+            .collect::<Vec<(AnimatedImage, Vec<RangeInclusive<usize>>)>>();
+
+        let username = msg
+            .get_tag(OwnedTag::DisplayName)
+            .or_else(|| msg.get_username().map(Into::into))
+            .unwrap_or("FUCK".into());
+
+        let [r, g, b] = msg.get_color().unwrap_or([96; 3]);
+        let mut hsl: palette::Hsl = palette::Srgb::new(r, g, b).into_format().into_color();
+        hsl.lightness = hsl.lightness.max(0.3);
+        let (r, g, b) = palette::Srgb::from_color(hsl)
+            .into_format()
+            .into_components();
+        let color = Color::from_rgb8(r, g, b);
+
+        let mut char_pos = 0;
+        let msg_col = if msg.is_me() { Some(color) } else { None };
+
+        let spans = msg.message_text().split(' ').map(|w| {
+            let word_chars = w.chars().count();
+            let elem = emotes
+                .iter()
+                .find(|e| {
+                    e.1.iter()
+                        .any(|r| *r == (char_pos..=(char_pos + word_chars - 1)))
+                })
+                .map(|e| Element::new(e.0.clone()))
+                .or_else(|| self.emotes.get(w).map(|e| e.view()))
+                .unwrap_or_else(|| Text::new(w.to_owned()).color_maybe(msg_col).into());
+            char_pos += word_chars + 1;
+            elem
+        });
+
+        let spans = itertools::intersperse_with(spans, || Text::new(" ").into());
+
+        let text = Rich::<_, Message>::with_spans([
+            Span::new(" "),
+            Span::new(username.clone().into_owned())
+                .color(color)
+                .link(username.into_owned()),
+            Span::new(": "),
+        ])
+        .on_link_click(Message::ShowUserCard);
+
+        let line = [badges.into(), text.into()].into_iter().chain(spans);
+
+        column![
+            Container::new(Row::from_iter(line).align_y(Alignment::End).wrap())
+                .padding(Padding::default().vertical(4.0).horizontal(6.0)),
+            rule::horizontal(1),
+        ]
+        .into()
     }
 }
 
@@ -190,7 +270,7 @@ fn view_irc(msg: &AnySemantic) -> Option<Element<'_, Message>> {
             }
         }
         AnySemantic::HostTarget(_) => None,
-        AnySemantic::PrivMsg(priv_msg) => Some(view_message(priv_msg)),
+        AnySemantic::PrivMsg(priv_msg) => Some(todo!()),
         AnySemantic::Ping(_) => {
             if cfg!(debug_assertions) {
                 Some(Rich::<(), _>::with_spans([Span::new("Ping received from twitch.")]).into())
@@ -218,99 +298,4 @@ fn view_irc(msg: &AnySemantic) -> Option<Element<'_, Message>> {
         }
         AnySemantic::Useless(_) => None,
     }
-}
-
-fn view_message(msg: &PrivMsg) -> Element<'static, Message> {
-    let badges = msg
-        .badges()
-        .filter_map(|(set, id)| {
-            BADGE_CACHE
-                .get(&(set.to_owned(), id.to_owned()))
-                .and_then(|h| h.get()?.as_ref().ok().cloned())
-        })
-        .map(|h| Element::new(iced::widget::image(h.to_owned())))
-        .collect::<Row<Message>>()
-        .spacing(3);
-
-    let emotes = msg
-        .emotes()
-        .filter_map(|(e, ranges)| {
-            Some((
-                twitch::emotes::EMOTE_CACHE
-                    .get(e)
-                    .and_then(|h| h.get()?.as_ref().ok().cloned())?,
-                ranges,
-            ))
-        })
-        .map(|(h, r)| (h.to_owned(), r))
-        .collect::<Vec<(AnimatedImage, Vec<RangeInclusive<usize>>)>>();
-
-    let stv_emotes = seventv::CHANNELS.try_read().ok();
-    let stv_emotes = stv_emotes
-        .as_ref()
-        .and_then(|c| msg.channel_id().and_then(|id| c.get(id)))
-        .and_then(|e| e.as_ref().ok());
-
-    let username = msg
-        .get_tag(OwnedTag::DisplayName)
-        .or_else(|| msg.get_username().map(Into::into))
-        .unwrap_or("FUCK".into());
-
-    let [r, g, b] = msg.get_color().unwrap_or([96; 3]);
-    let mut hsl: palette::Hsl = palette::Srgb::new(r, g, b).into_format().into_color();
-    hsl.lightness = hsl.lightness.max(0.3);
-    let (r, g, b) = palette::Srgb::from_color(hsl)
-        .into_format()
-        .into_components();
-    let color = Color::from_rgb8(r, g, b);
-
-    let mut char_pos = 0;
-    let msg_col = if msg.is_me() { Some(color) } else { None };
-
-    let spans = msg.message_text().split(' ').map(|w| {
-        let word_chars = w.chars().count();
-        let elem = emotes
-            .iter()
-            .find(|e| {
-                e.1.iter()
-                    .any(|r| *r == (char_pos..=(char_pos + word_chars - 1)))
-            })
-            .map(|e| Element::new(e.0.clone()))
-            .or_else(|| {
-                stv_emotes
-                    .and_then(|e| {
-                        e.binary_search_by(|e| e.alias.as_str().cmp(w))
-                            .ok()
-                            .map(|i| &e[i])
-                    })
-                    .and_then(|e| seventv::EMOTE_CACHE.get(&(e.id, seventv::EmoteSize::OneX)))
-                    .as_ref()
-                    .and_then(|e| e.get())
-                    .as_ref()
-                    .and_then(|e| e.as_ref().ok().map(|i| i.clone().into()))
-            })
-            .unwrap_or_else(|| Text::new(w.to_owned()).color_maybe(msg_col).into());
-        char_pos += word_chars + 1;
-        elem
-    });
-
-    let spans = itertools::intersperse_with(spans, || Text::new(" ").into());
-
-    let text = Rich::<_, Message>::with_spans([
-        Span::new(" "),
-        Span::new(username.clone().into_owned())
-            .color(color)
-            .link(username.into_owned()),
-        Span::new(": "),
-    ])
-    .on_link_click(Message::ShowUserCard);
-
-    let line = [badges.into(), text.into()].into_iter().chain(spans);
-
-    column![
-        Container::new(Row::from_iter(line).align_y(Alignment::End).wrap())
-            .padding(Padding::default().vertical(4.0).horizontal(6.0)),
-        rule::horizontal(1),
-    ]
-    .into()
 }
