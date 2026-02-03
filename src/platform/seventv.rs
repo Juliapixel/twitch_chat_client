@@ -115,6 +115,49 @@ impl SevenTvClient {
         }
     }
 
+    pub async fn get_globals(&self) -> anyhow::Result<Vec<ChannelEmote>> {
+        let req = self
+            .client
+            .get("https://7tv.io/v3/emote-sets/global")
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<EmoteSet>()
+            .await?;
+
+        let mut emotes = req
+            .emotes
+            .into_iter()
+            .map(|e| {
+                let max_size = e
+                    .host
+                    .map(|h| h.files.into_iter())
+                    .into_iter()
+                    .flatten()
+                    .fold(EmoteSize::OneX, |acc, h| {
+                        h.static_name
+                            .parse::<EmoteSize>()
+                            .map(|m| m.max(acc))
+                            .unwrap_or(acc)
+                    });
+                ChannelEmote {
+                    image: self.lazy_emote(e.id, max_size),
+                    alias: None,
+                    metadata: Arc::new(EmoteMetadata {
+                        original_name: e.name,
+                        flags: EmoteFlags::empty(),
+                        id: e.id.to_string(),
+                        platform: crate::platform::EmotePlatform::SevenTv,
+                    }),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        emotes.sort_unstable_by(|a, b| a.text_name().cmp(b.text_name()));
+
+        Ok(emotes)
+    }
+
     /// Blocks until the channel cache lock has been free'd
     pub fn channel_emote_set(&self, id: &str) -> Option<Arc<[ChannelEmote]>> {
         self.channels
