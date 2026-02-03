@@ -310,7 +310,10 @@ where
             shell,
             viewport,
         );
-        if let Some(layout) = layout.children().nth(1) {
+
+        if !shell.is_layout_invalid()
+            && let Some(layout) = layout.children().nth(1)
+        {
             let offset = if self.fallback.is_some() { 2 } else { 1 };
             if let Some((i, (_, active))) = self.get_active_mut(tree.state.downcast_ref()) {
                 active.as_widget_mut().update(
