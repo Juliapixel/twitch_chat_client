@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, ops::RangeInclusive, sync::Arc};
 
+use futures::future::BoxFuture;
 use hashbrown::HashMap;
 use iced::{
     Alignment, Border, Color, Element, Length, Padding, Task,
@@ -34,13 +35,15 @@ pub struct Chat {
     pub message: String,
     pub usercard: Option<String>,
 
+    emote_sets_loaded: bool,
+    emote_generation: u64,
     pub emotes: HashMap<String, ChannelEmote>,
 
     show_scroll_to_bottom: bool,
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone)]
+#[derive(derive_more::Debug)]
 pub enum Message {
     SendMessage,
     MessageChange(String),
@@ -48,6 +51,36 @@ pub enum Message {
     ShowUserCard(String),
     ScrollToBottom,
     ChatScrolled(ScrollViewport),
+    #[debug("Box<dyn CloneFn + Send>")]
+    LoadImage(Box<dyn CloneFn + Send>),
+    EmoteSetsLoaded,
+    EmoteLoaded,
+}
+
+impl Clone for Message {
+    fn clone(&self) -> Self {
+        match self {
+            Self::SendMessage => Self::SendMessage,
+            Self::MessageChange(arg0) => Self::MessageChange(arg0.clone()),
+            Self::CloseUserCard => Self::CloseUserCard,
+            Self::ShowUserCard(arg0) => Self::ShowUserCard(arg0.clone()),
+            Self::ScrollToBottom => Self::ScrollToBottom,
+            Self::ChatScrolled(arg0) => Self::ChatScrolled(arg0.clone()),
+            Self::LoadImage(arg0) => Self::LoadImage(arg0.clone_boxed()),
+            Self::EmoteSetsLoaded => Self::EmoteSetsLoaded,
+            Self::EmoteLoaded => Self::EmoteLoaded,
+        }
+    }
+}
+
+pub trait CloneFn: Fn() -> Task<Message> {
+    fn clone_boxed(&self) -> Box<dyn CloneFn + Send>;
+}
+
+impl<T: Fn() -> Task<Message> + Clone + Send + 'static> CloneFn for T {
+    fn clone_boxed(&self) -> Box<dyn CloneFn + Send> {
+        Box::new(self.clone())
+    }
 }
 
 impl Chat {
@@ -59,6 +92,8 @@ impl Chat {
             message: Default::default(),
             usercard: Default::default(),
 
+            emote_sets_loaded: false,
+            emote_generation: 0,
             emotes: Default::default(),
 
             show_scroll_to_bottom: false,
@@ -93,11 +128,20 @@ impl Chat {
             header,
             rule::horizontal(1).style(rule::weak),
             iced::widget::stack!(
-                scrollie(
-                    msgs.iter().map(|(m, key)| {
-                        (lazy((key, image_gen), |_| self.view_message(m)), *key)
-                    })
-                )
+                scrollie(msgs.iter().map(|(m, key)| {
+                    (
+                        lazy(
+                            (
+                                key,
+                                self.emote_generation,
+                                self.emote_sets_loaded,
+                                image_gen,
+                            ),
+                            |_| self.view_message(m),
+                        ),
+                        *key,
+                    )
+                }))
                 .on_scroll(Message::ChatScrolled)
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -127,6 +171,9 @@ impl Chat {
             Message::ChatScrolled(vp) => {
                 self.show_scroll_to_bottom = !vp.is_at_bottom();
             }
+            Message::LoadImage(t) => return t().chain(Task::done(Message::EmoteLoaded)),
+            Message::EmoteSetsLoaded => self.emote_sets_loaded = true,
+            Message::EmoteLoaded => self.emote_generation += 1,
         };
         Task::none()
     }
@@ -181,7 +228,11 @@ impl Chat {
                         .any(|r| *r == (char_pos..=(char_pos + word_chars - 1)))
                 })
                 .map(|e| Element::new(e.0.clone()))
-                .or_else(|| self.emotes.get(w).map(|e| e.view()))
+                .or_else(|| {
+                    self.emotes
+                        .get(w)
+                        .map(|e| e.view().map(|t| Message::LoadImage(Box::new(t))))
+                })
                 .unwrap_or_else(|| Text::new(w.to_owned()).color_maybe(msg_col).into());
             char_pos += word_chars + 1;
             elem

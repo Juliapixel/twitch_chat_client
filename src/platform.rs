@@ -2,8 +2,8 @@ use std::{fmt::Display, sync::Arc};
 
 use futures::future::BoxFuture;
 use iced::{
-    Border, Color, Element,
-    widget::{Container, Text, column, container, tooltip},
+    Border, Color, Element, Task,
+    widget::{Container, Text, column, container, sensor, tooltip},
 };
 
 use crate::widget::animated::AnimatedImage;
@@ -14,7 +14,7 @@ pub mod twitch;
 
 pub static DECODER_SEMAPHORE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
-type MaybeImage = anyhow::Result<AnimatedImage>;
+type MaybeImage = Option<AnimatedImage>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EmotePlatform {
@@ -65,8 +65,10 @@ impl ChannelEmote {
             .unwrap_or(self.metadata.original_name.as_str())
     }
 
-    pub fn view<M: 'static>(&self) -> Element<'static, M> {
-        if let Some(image) = self.image.try_get().and_then(|i| i.as_ref().ok()) {
+    pub fn view<M: Send + 'static>(
+        &self,
+    ) -> Element<'static, impl Fn() -> Task<M> + Clone + 'static> {
+        if let Some(image) = self.image.try_get().and_then(|i| i.as_ref()) {
             tooltip(
                 image.clone(),
                 Container::new(column![
@@ -83,9 +85,19 @@ impl ChannelEmote {
             )
             .into()
         } else {
-            Text::new(self.text_name().to_owned())
-                .color([0.8; 3])
-                .into()
+            let copy = self.image.clone();
+            Element::new(
+                sensor(Text::new(self.text_name().to_owned()).color([0.8; 3])).on_show(move |_| {
+                    let sent = copy.clone();
+                    move || {
+                        let sent2 = sent.clone();
+                        Task::future(async move {
+                            sent2.get_unpin().await;
+                        })
+                        .discard()
+                    }
+                }),
+            )
         }
     }
 }

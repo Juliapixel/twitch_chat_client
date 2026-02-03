@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use ulid::Ulid;
 
 use crate::{
-    platform::{ChannelEmote, DECODER_SEMAPHORE, EmoteFlags, EmoteMetadata},
+    platform::{ChannelEmote, DECODER_SEMAPHORE, EmoteFlags, EmoteMetadata, MaybeImage},
     util::default_client,
     widget::animated::AnimatedImage,
 };
@@ -127,10 +127,7 @@ impl Display for EmoteSize {
     }
 }
 
-type MaybeImage = anyhow::Result<AnimatedImage>;
-
-type EmoteCache =
-    moka::sync::Cache<(Ulid, EmoteSize), Arc<Lazy<MaybeImage, BoxFuture<'static, MaybeImage>>>>;
+type EmoteCache = moka::future::Cache<(Ulid, EmoteSize), MaybeImage>;
 
 pub struct SevenTvClient {
     client: reqwest::Client,
@@ -141,7 +138,7 @@ pub struct SevenTvClient {
 impl SevenTvClient {
     pub fn new() -> Self {
         let client = default_client();
-        let cache = moka::sync::CacheBuilder::new(300)
+        let cache = moka::future::CacheBuilder::new(300)
             .eviction_policy(EvictionPolicy::tiny_lfu())
             .time_to_idle(Duration::from_secs(60 * 30))
             .name("badges")
@@ -179,7 +176,7 @@ impl SevenTvClient {
                             .unwrap_or(acc)
                     });
                 ChannelEmote {
-                    image: self.lazy_emote(e.id, EmoteSize::OneX),
+                    image: Arc::new(self.lazy_emote(e.id, EmoteSize::OneX)),
                     alias: None,
                     metadata: Arc::new(EmoteMetadata {
                         original_name: e.name,
@@ -219,35 +216,45 @@ impl SevenTvClient {
         &self,
         id: Ulid,
         size: EmoteSize,
-    ) -> Arc<Lazy<MaybeImage, BoxFuture<'static, MaybeImage>>> {
+    ) -> Lazy<MaybeImage, BoxFuture<'static, MaybeImage>> {
         let client = self.client.clone();
-        self.emotes.get_with((id, size), || {
-            Arc::new(Lazy::new(Box::pin(async move {
-                let start = std::time::Instant::now();
-                let data = client
-                    .get(format!("https://cdn.7tv.app/emote/{id}/{size}"))
-                    .header("Accept", "image/webp,image/png,image/gif")
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .bytes()
-                    .await?;
+        let cache = self.emotes.clone();
 
-                let kbps = data.len() as f32 / 1000.0 / start.elapsed().as_secs_f32();
+        Lazy::new(Box::pin(async move {
+            cache
+                .get_with((id, size), async move {
+                    let start = std::time::Instant::now();
+                    let data = client
+                        .get(format!("https://cdn.7tv.app/emote/{id}/{size}"))
+                        .header("Accept", "image/webp,image/png,image/gif")
+                        .send()
+                        .await
+                        .ok()?
+                        .error_for_status()
+                        .ok()?
+                        .bytes()
+                        .await
+                        .ok()?;
 
-                let img = {
-                    let _ = DECODER_SEMAPHORE.acquire().await.unwrap();
-                    tokio::task::spawn_blocking(move || AnimatedImage::from_bytes(&data)).await??
-                };
+                    let kbps = data.len() as f32 / 1000.0 / start.elapsed().as_secs_f32();
 
-                log::trace!(
-                    "7TV emote {id} loaded in {:?} at {kbps:02}kb/s",
-                    start.elapsed()
-                );
+                    let img = {
+                        let _ = DECODER_SEMAPHORE.acquire().await.unwrap();
+                        tokio::task::spawn_blocking(move || AnimatedImage::from_bytes(&data))
+                            .await
+                            .ok()?
+                            .ok()?
+                    };
 
-                Ok(img)
-            })))
-        })
+                    log::trace!(
+                        "7TV emote {id} loaded in {:?} at {kbps:02}kb/s",
+                        start.elapsed()
+                    );
+
+                    Some(img)
+                })
+                .await
+        }))
     }
 
     pub async fn load_channel_emote_set(&self, id: String) -> bool {
@@ -278,7 +285,7 @@ impl SevenTvClient {
                                 .unwrap_or(acc)
                         });
                     ChannelEmote {
-                        image: self.lazy_emote(e.id, EmoteSize::OneX),
+                        image: Arc::new(self.lazy_emote(e.id, EmoteSize::OneX)),
                         alias: Some(e.name),
                         metadata: Arc::new(EmoteMetadata {
                             original_name: e.data.name,

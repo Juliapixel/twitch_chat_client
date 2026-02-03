@@ -170,27 +170,6 @@ impl Juliarino {
                     return Task::none();
                 };
 
-                let seventv_emotes = if let Some(id) = priv_msg.channel_id() {
-                    self.seventv_client.try_channel_emote_set(id)
-                } else {
-                    None
-                }
-                .unwrap_or_default();
-
-                let p = &priv_msg;
-
-                let seventv_emotes_task = p
-                    .message_text()
-                    .split(' ')
-                    .filter_map(|w| {
-                        seventv_emotes
-                            .binary_search_by(|e| e.text_name().cmp(w))
-                            .ok()
-                            .map(|i| seventv_emotes[i].image.clone())
-                    })
-                    .filter(|i| i.try_get().is_none())
-                    .map(|e| Task::future(async move { e.get_unpin().await.is_ok() }));
-
                 let badge_tasks = priv_msg
                     .badges()
                     .map(|(set, id)| (set.to_owned(), id.to_owned()))
@@ -203,14 +182,13 @@ impl Juliarino {
                 if chat.messages.len() > 500 {
                     chat.messages.pop_front();
                 }
-                let task = Task::batch(badge_tasks.chain(emote_tasks).chain(seventv_emotes_task))
-                    .then(|r| {
-                        if r {
-                            Task::done(Message::ImageLoaded)
-                        } else {
-                            Task::none()
-                        }
-                    });
+                let task = Task::batch(badge_tasks.chain(emote_tasks)).then(|r| {
+                    if r {
+                        Task::done(Message::ImageLoaded)
+                    } else {
+                        Task::none()
+                    }
+                });
                 let key = MESSAGE_KEY.fetch_add(1, Ordering::Relaxed);
                 chat.messages.push_back((Arc::new(priv_msg), key));
                 return task;
@@ -313,6 +291,9 @@ impl Juliarino {
                 ) {
                     chan.emotes
                         .extend(emotes.iter().map(|e| (e.text_name().to_owned(), e.clone())));
+                    return chan
+                        .update(chat::Message::EmoteSetsLoaded)
+                        .map(move |m| Message::ChatMessage(login.clone(), m));
                 }
             }
             // Signaling messages
