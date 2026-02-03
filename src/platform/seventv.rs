@@ -42,8 +42,46 @@ struct EmoteSet {
 #[derive(Deserialize)]
 struct Emote {
     id: ulid::Ulid,
+    /// Alias in channel
     name: String,
-    host: Option<EmoteHost>,
+    data: EmoteData,
+}
+
+#[derive(Deserialize)]
+struct EmoteData {
+    /// Original name
+    name: String,
+    flags: SevenTvEmoteFlags,
+    host: EmoteHost,
+}
+
+#[derive(Deserialize)]
+struct SevenTvEmoteFlags(u32);
+
+// https://github.com/SevenTV/SevenTV/blob/a558d2c28d3f9e4feccf71ef32d7771384910b7f/shared/src/old_types/mod.rs#L622-L632
+bitflags::bitflags! {
+    impl SevenTvEmoteFlags: u32 {
+        const PRIVATE = 1 << 0;
+        const AUTHENTIC = 1 << 1;
+        const ZERO_WIDTH = 1 << 8;
+        const SEXUAL = 1 << 16;
+        const EPILEPSY = 1 << 17;
+        const EDGY = 1 << 18;
+        const TWITCHDISALLOWED = 1 << 24;
+    }
+}
+
+impl From<SevenTvEmoteFlags> for EmoteFlags {
+    fn from(value: SevenTvEmoteFlags) -> Self {
+        let mut flags = EmoteFlags::empty();
+        if value.contains(SevenTvEmoteFlags::ZERO_WIDTH) {
+            flags |= EmoteFlags::OVERLAYING;
+        }
+        if value.contains(SevenTvEmoteFlags::PRIVATE) {
+            flags |= EmoteFlags::HIDDEN;
+        }
+        flags
+    }
 }
 
 #[derive(Deserialize)]
@@ -130,10 +168,10 @@ impl SevenTvClient {
             .into_iter()
             .map(|e| {
                 let max_size = e
+                    .data
                     .host
-                    .map(|h| h.files.into_iter())
+                    .files
                     .into_iter()
-                    .flatten()
                     .fold(EmoteSize::OneX, |acc, h| {
                         h.static_name
                             .parse::<EmoteSize>()
@@ -141,11 +179,11 @@ impl SevenTvClient {
                             .unwrap_or(acc)
                     });
                 ChannelEmote {
-                    image: self.lazy_emote(e.id, max_size),
+                    image: self.lazy_emote(e.id, EmoteSize::OneX),
                     alias: None,
                     metadata: Arc::new(EmoteMetadata {
                         original_name: e.name,
-                        flags: EmoteFlags::empty(),
+                        flags: e.data.flags.into(),
                         id: e.id.to_string(),
                         platform: crate::platform::EmotePlatform::SevenTv,
                     }),
@@ -213,65 +251,55 @@ impl SevenTvClient {
     }
 
     pub async fn load_channel_emote_set(&self, id: String) -> bool {
-        let mut channels = self.channels.write().await;
-        let entry = channels.entry_ref(&id);
+        let load = async || {
+            let req = self
+                .client
+                .get(format!("https://7tv.io/v3/users/twitch/{id}"))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<SevenTvUserQuery>()
+                .await?;
 
-        match entry {
-            hashbrown::hash_map::EntryRef::Vacant(e) => {
-                let func = async || {
-                    let req = self
-                        .client
-                        .get(format!("https://7tv.io/v3/users/twitch/{id}"))
-                        .send()
-                        .await?
-                        .error_for_status()?
-                        .json::<SevenTvUserQuery>()
-                        .await?;
-
-                    let mut emotes = req
-                        .emote_set
-                        .emotes
+            let mut emotes = req
+                .emote_set
+                .emotes
+                .into_iter()
+                .map(|e| {
+                    let max_size = e
+                        .data
+                        .host
+                        .files
                         .into_iter()
-                        .map(|e| {
-                            let max_size = e
-                                .host
-                                .map(|h| h.files.into_iter())
-                                .into_iter()
-                                .flatten()
-                                .fold(EmoteSize::OneX, |acc, h| {
-                                    h.static_name
-                                        .parse::<EmoteSize>()
-                                        .map(|m| m.max(acc))
-                                        .unwrap_or(acc)
-                                });
-                            ChannelEmote {
-                                image: self.lazy_emote(e.id, max_size),
-                                alias: Some(e.name.clone()),
-                                metadata: Arc::new(EmoteMetadata {
-                                    original_name: e.name,
-                                    flags: EmoteFlags::empty(),
-                                    id: e.id.to_string(),
-                                    platform: crate::platform::EmotePlatform::SevenTv,
-                                }),
-                            }
-                        })
-                        .collect::<Vec<_>>();
+                        .fold(EmoteSize::OneX, |acc, h| {
+                            h.static_name
+                                .parse::<EmoteSize>()
+                                .map(|m| m.max(acc))
+                                .unwrap_or(acc)
+                        });
+                    ChannelEmote {
+                        image: self.lazy_emote(e.id, EmoteSize::OneX),
+                        alias: Some(e.name),
+                        metadata: Arc::new(EmoteMetadata {
+                            original_name: e.data.name,
+                            flags: e.data.flags.into(),
+                            id: e.id.to_string(),
+                            platform: crate::platform::EmotePlatform::SevenTv,
+                        }),
+                    }
+                })
+                .collect::<Vec<_>>();
 
-                    emotes.sort_unstable_by(|a, b| a.text_name().cmp(b.text_name()));
+            emotes.sort_unstable_by(|a, b| a.text_name().cmp(b.text_name()));
 
-                    Ok(emotes.into())
-                };
+            Ok(emotes.into())
+        };
 
-                let value = func().await;
+        let emotes = load().await;
+        let loaded = emotes.is_ok();
 
-                if let Err(e) = value {
-                    log::warn!("failed to load 7tv channel data for {id}: {e:?}");
-                }
-
-                e.insert(func().await);
-                true
-            }
-            _ => false,
-        }
+        let mut channels = self.channels.write().await;
+        channels.insert(id.clone(), emotes);
+        loaded
     }
 }

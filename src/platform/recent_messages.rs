@@ -1,6 +1,5 @@
 use std::{fmt, sync::LazyLock};
 
-use futures::TryFutureExt;
 use serde::{Deserialize, Deserializer, de::Visitor};
 use twixel_core::IrcMessage;
 
@@ -61,12 +60,9 @@ pub async fn get_recent_messages(channel_login: &str) -> Vec<IrcMessage> {
     let mut url = RECENT_MESSAGES_API
         .join(&format!("recent-messages/{channel_login}"))
         .unwrap();
-    url.set_query(Some("limit=250&"));
-    CLIENT
-        .get(url)
-        .send()
-        .and_then(async |r| r.json::<Response>().await)
-        .await
-        .unwrap_or_default()
-        .messages
+    url.set_query(Some("limit=250"));
+    match CLIENT.get(url).send().await {
+        Ok(r) => r.json::<Response>().await.unwrap_or_default().messages,
+        Err(_) => Vec::new(),
+    }
 }
