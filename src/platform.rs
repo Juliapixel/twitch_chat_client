@@ -1,7 +1,4 @@
-use std::{
-    fmt::Display,
-    sync::{Arc, Weak},
-};
+use std::{fmt::Display, sync::Arc};
 
 use futures::future::BoxFuture;
 use iced::{
@@ -11,6 +8,7 @@ use iced::{
 
 use crate::widget::animated::AnimatedImage;
 
+pub mod recent_messages;
 pub mod seventv;
 pub mod twitch;
 

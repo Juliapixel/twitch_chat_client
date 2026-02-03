@@ -10,8 +10,9 @@ use iced::{
     window,
 };
 use indexmap::IndexMap;
+use itertools::Itertools;
 use twixel_core::{
-    MessageBuilder,
+    IrcMessage, MessageBuilder,
     auth::Anonymous,
     irc_message::{AnySemantic, PrivMsg, SemanticIrcMessage},
 };
@@ -23,7 +24,8 @@ use crate::{
     config_ui::ConfigUi,
     operation::switch_to_tab,
     platform::{
-        seventv::{self, SevenTvClient},
+        recent_messages::get_recent_messages,
+        seventv::SevenTvClient,
         twitch::{self, badges::load_badge},
     },
     title_bar::TitleBar,
@@ -85,6 +87,7 @@ enum Message {
     ChannelJoined(String),
     /// New message received over IRC
     NewMessage(PrivMsg),
+    RecentMessagesLoaded(String, Vec<IrcMessage>),
     /// Message for [components::join_popup::JoinPopup]
     JoinPopupMessage(join_popup::Message),
     /// Message for [chat::Chat]
@@ -120,6 +123,47 @@ impl Juliarino {
     fn update(&mut self, msg: Message) -> Task<Message> {
         match msg {
             Message::IrcConnected(tx) => self.irc_command = Some(tx),
+            Message::RecentMessagesLoaded(chan, new) => {
+                let Some(chan) = self.channels.get_mut(&chan) else {
+                    return Task::none();
+                };
+
+                let cur = &mut chan.messages;
+
+                for msg in new
+                    .into_iter()
+                    .filter_map(|m| PrivMsg::from_message(m).ok())
+                {
+                    let Some(ts) = msg.get_timestamp() else {
+                        continue;
+                    };
+
+                    if cur
+                        .front()
+                        .is_some_and(|l| l.0.get_timestamp().is_some_and(|t| t < ts))
+                    {
+                        cur.push_back((Arc::new(msg), MESSAGE_KEY.fetch_add(1, Ordering::Relaxed)));
+                        continue;
+                    }
+
+                    let idx = cur
+                        .iter()
+                        .enumerate()
+                        .filter_map(|m| Some((m.0, m.1.0.get_timestamp()?)))
+                        .tuple_windows::<(_, _)>()
+                        .find(|(a, b)| ts > a.1 && ts < b.1)
+                        .map(|r| r.1.0);
+
+                    if let Some(idx) = idx {
+                        cur.insert(
+                            idx,
+                            (Arc::new(msg), MESSAGE_KEY.fetch_add(1, Ordering::Relaxed)),
+                        );
+                    } else {
+                        cur.push_back((Arc::new(msg), MESSAGE_KEY.fetch_add(1, Ordering::Relaxed)));
+                    }
+                }
+            }
             Message::NewMessage(priv_msg) => {
                 let chan = priv_msg.channel_login();
                 let Some(chat) = self.channels.get_mut(chan) else {
@@ -204,7 +248,8 @@ impl Juliarino {
             }
             Message::ChannelJoined(chan) => {
                 let stv = self.seventv_client.clone();
-                return Task::future(async move {
+                let chan2 = chan.clone();
+                let stv_task = Task::future(async move {
                     let data =
                         reqwest::get(format!("https://api.ivr.fi/v2/twitch/user?login={}", &chan))
                             .and_then(|r| r.json::<serde_json::Value>())
@@ -228,6 +273,13 @@ impl Juliarino {
                         Task::none()
                     }
                 });
+
+                let recent_task = Task::future(async move {
+                    let msgs = get_recent_messages(&chan2).await;
+                    Message::RecentMessagesLoaded(chan2, msgs)
+                });
+
+                return Task::batch([stv_task, recent_task]);
             }
             Message::JoinPopupMessage(m) => {
                 if let Some(p) = &mut self.join_window {

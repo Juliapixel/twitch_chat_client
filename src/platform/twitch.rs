@@ -1,3 +1,9 @@
+use std::sync::LazyLock;
+
+use crate::util::default_client;
+
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(default_client);
+
 pub mod badges {
     use std::{
         borrow::Cow,
@@ -36,8 +42,6 @@ pub mod badges {
     });
 
     pub async fn load_badge(set: String, id: String) -> bool {
-        static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
-
         let mut loaded = false;
 
         BADGE_CACHE
@@ -54,7 +58,7 @@ pub mod badges {
                     .image
                     .clone();
 
-                let data = CLIENT
+                let data = super::CLIENT
                     .get(format!("{url}1"))
                     .header("Accept", "image/webp,image/png,image/gif,image/avif")
                     .send()
@@ -95,19 +99,12 @@ pub mod emotes {
     });
 
     pub async fn load_emote(id: String) -> bool {
-        static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-            reqwest::ClientBuilder::new()
-                .timeout(Duration::from_secs(90))
-                .build()
-                .unwrap()
-        });
-
         let mut loaded = false;
 
         EMOTE_CACHE
             .get_with_by_ref(&id, || Arc::new(tokio::sync::OnceCell::new()))
             .get_or_init(async || {
-                let data = CLIENT
+                let data = super::CLIENT
                     .get(format!(
                         "https://static-cdn.jtvnw.net/emoticons/v2/{id}/default/dark/1.0"
                     ))

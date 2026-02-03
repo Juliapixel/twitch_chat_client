@@ -10,6 +10,7 @@ use ulid::Ulid;
 
 use crate::{
     platform::{ChannelEmote, DECODER_SEMAPHORE, EmoteFlags, EmoteMetadata},
+    util::default_client,
     widget::animated::AnimatedImage,
 };
 
@@ -101,10 +102,7 @@ pub struct SevenTvClient {
 
 impl SevenTvClient {
     pub fn new() -> Self {
-        let client = reqwest::ClientBuilder::new()
-            .timeout(Duration::from_secs(90))
-            .build()
-            .unwrap();
+        let client = default_client();
         let cache = moka::sync::CacheBuilder::new(300)
             .eviction_policy(EvictionPolicy::tiny_lfu())
             .time_to_idle(Duration::from_secs(60 * 30))
@@ -154,12 +152,17 @@ impl SevenTvClient {
                     .bytes()
                     .await?;
 
+                let kbps = data.len() as f32 / 1000.0 / start.elapsed().as_secs_f32();
+
                 let img = {
                     let _ = DECODER_SEMAPHORE.acquire().await.unwrap();
                     tokio::task::spawn_blocking(move || AnimatedImage::from_bytes(&data)).await??
                 };
 
-                log::debug!("7TV emote {id} loaded in {:?}", start.elapsed());
+                log::trace!(
+                    "7TV emote {id} loaded in {:?} at {kbps:02}kb/s",
+                    start.elapsed()
+                );
 
                 Ok(img)
             })))

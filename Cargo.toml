@@ -30,6 +30,7 @@ tokio = { version = "1.49", features = ["sync"] }
 tokio-tungstenite = { version = "0.28.0", features = ["rustls", "tokio-rustls"] }
 toml = { version = "0.9.11", features = ["serde"] }
 ulid = { version = "1.2", features = ["serde"] }
+url = "2.5.8"
 
 [dependencies.iced]
 version = "0.14"
@@ -54,7 +55,7 @@ features = ["log", "logging", "ring", "std", "tls12"]
 git = "https://github.com/juliapixel/twixel_rs"
 branch = "feat/message-rework"
 # path = "../twixel_rs/twixel_core"
-features = ["connection", "rustls"]
+features = ["connection", "rustls", "chrono"]
 
 [profile.release]
 strip = "none"
