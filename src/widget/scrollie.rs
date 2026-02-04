@@ -456,7 +456,12 @@ where
         {
             let cursor = match cursor {
                 mouse::Cursor::Available(p) => {
-                    mouse::Cursor::Available(p + [0.0, state.translation].into())
+                    let pos = p + [0.0, state.translation].into();
+                    if bounds.contains(p) {
+                        mouse::Cursor::Available(pos)
+                    } else {
+                        mouse::Cursor::Levitating(pos)
+                    }
                 }
                 mouse::Cursor::Levitating(p) => {
                     mouse::Cursor::Levitating(p + [0.0, state.translation].into())

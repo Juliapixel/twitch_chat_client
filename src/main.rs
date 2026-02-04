@@ -231,7 +231,7 @@ impl Juliarino {
                     let data =
                         reqwest::get(format!("https://api.ivr.fi/v2/twitch/user?login={}", &chan))
                             .and_then(|r| r.json::<serde_json::Value>())
-                            .inspect_err(|e| log::error!("{e}"))
+                            .inspect_err(|e| log::error!("{e}\n{e:?}"))
                             .await;
 
                     if let Some(id) = data.ok().as_ref().and_then(|d| d[0]["id"].as_str()) {
