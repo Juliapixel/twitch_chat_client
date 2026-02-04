@@ -1,9 +1,10 @@
 use std::{fmt::Display, sync::Arc};
 
+use async_once_cell::Lazy;
 use futures::future::BoxFuture;
 use iced::{
     Border, Color, Element, Task,
-    widget::{Container, Text, column, container, sensor, tooltip},
+    widget::{Container, Space, Text, column, container, sensor, tooltip},
 };
 
 use crate::widget::animated::AnimatedImage;
@@ -51,9 +52,19 @@ pub struct EmoteMetadata {
     pub platform: EmotePlatform,
 }
 
+type EmoteImage = (Lazy<MaybeImage, BoxFuture<'static, MaybeImage>>, (u32, u32));
+
+#[derive(Debug)]
+pub struct EmoteImages {
+    one_x: EmoteImage,
+    two_x: Option<EmoteImage>,
+    three_x: Option<EmoteImage>,
+    four_x: Option<EmoteImage>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChannelEmote {
-    pub image: Arc<async_once_cell::Lazy<MaybeImage, BoxFuture<'static, MaybeImage>>>,
+    pub images: Arc<EmoteImages>,
     pub alias: Option<String>,
     pub metadata: Arc<EmoteMetadata>,
 }
@@ -68,9 +79,9 @@ impl ChannelEmote {
     pub fn view<M: Send + 'static>(
         &self,
     ) -> Element<'static, impl Fn() -> Task<M> + Clone + 'static> {
-        if let Some(image) = self.image.try_get().and_then(|i| i.as_ref()) {
+        let tooltiper = |e: Element<'static, _>| {
             tooltip(
-                image.clone(),
+                e,
                 Container::new(column![
                     Text::new(self.text_name().to_owned()),
                     Text::new(self.metadata.platform.as_str())
@@ -83,21 +94,26 @@ impl ChannelEmote {
                 }),
                 tooltip::Position::Top,
             )
-            .into()
+        };
+
+        if let Some(image) = self.images.one_x.0.try_get().and_then(|i| i.as_ref()) {
+            tooltiper(image.clone().into()).into()
         } else {
-            let copy = self.image.clone();
-            Element::new(
-                sensor(Text::new(self.text_name().to_owned()).color([0.8; 3])).on_show(move |_| {
-                    let sent = copy.clone();
-                    move || {
-                        let sent2 = sent.clone();
-                        Task::future(async move {
-                            sent2.get_unpin().await;
-                        })
-                        .discard()
-                    }
-                }),
-            )
+            let copy = self.images.clone();
+            let placeholder = Space::new()
+                .width(self.images.one_x.1.0)
+                .height(self.images.one_x.1.1);
+            tooltiper(Element::new(sensor(placeholder).on_show(move |_| {
+                let sent = copy.clone();
+                move || {
+                    let sent2 = sent.clone();
+                    Task::future(async move {
+                        sent2.one_x.0.get_unpin().await;
+                    })
+                    .discard()
+                }
+            })))
+            .into()
         }
     }
 }

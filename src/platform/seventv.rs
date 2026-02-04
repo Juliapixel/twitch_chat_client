@@ -9,7 +9,9 @@ use tokio::sync::RwLock;
 use ulid::Ulid;
 
 use crate::{
-    platform::{ChannelEmote, DECODER_SEMAPHORE, EmoteFlags, EmoteMetadata, MaybeImage},
+    platform::{
+        ChannelEmote, DECODER_SEMAPHORE, EmoteFlags, EmoteImages, EmoteMetadata, MaybeImage,
+    },
     util::default_client,
     widget::animated::AnimatedImage,
 };
@@ -91,6 +93,8 @@ struct EmoteHost {
 
 #[derive(Deserialize)]
 struct File {
+    width: u32,
+    height: u32,
     static_name: String,
 }
 
@@ -164,19 +168,48 @@ impl SevenTvClient {
             .emotes
             .into_iter()
             .map(|e| {
-                let max_size = e
+                let find_size = |size: EmoteSize| {
+                    move |f: &File| {
+                        if f.static_name.parse::<EmoteSize>().ok()? == size {
+                            Some((self.lazy_emote(e.id, size), (f.width, f.height)))
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                let one_x = e
                     .data
                     .host
                     .files
-                    .into_iter()
-                    .fold(EmoteSize::OneX, |acc, h| {
-                        h.static_name
-                            .parse::<EmoteSize>()
-                            .map(|m| m.max(acc))
-                            .unwrap_or(acc)
-                    });
+                    .iter()
+                    .find_map(find_size(EmoteSize::OneX));
+                let two_x = e
+                    .data
+                    .host
+                    .files
+                    .iter()
+                    .find_map(find_size(EmoteSize::TwoX));
+                let three_x = e
+                    .data
+                    .host
+                    .files
+                    .iter()
+                    .find_map(find_size(EmoteSize::ThreeX));
+                let four_x = e
+                    .data
+                    .host
+                    .files
+                    .iter()
+                    .find_map(find_size(EmoteSize::FourX));
+
                 ChannelEmote {
-                    image: Arc::new(self.lazy_emote(e.id, EmoteSize::OneX)),
+                    images: Arc::new(EmoteImages {
+                        one_x: one_x.unwrap_or((self.lazy_emote(e.id, EmoteSize::OneX), (32, 32))),
+                        two_x,
+                        three_x,
+                        four_x,
+                    }),
                     alias: None,
                     metadata: Arc::new(EmoteMetadata {
                         original_name: e.name,
@@ -273,19 +306,49 @@ impl SevenTvClient {
                 .emotes
                 .into_iter()
                 .map(|e| {
-                    let max_size = e
+                    let find_size = |size: EmoteSize| {
+                        move |f: &File| {
+                            if f.static_name.parse::<EmoteSize>().ok()? == size {
+                                Some((self.lazy_emote(e.id, size), (f.width, f.height)))
+                            } else {
+                                None
+                            }
+                        }
+                    };
+
+                    let one_x = e
                         .data
                         .host
                         .files
-                        .into_iter()
-                        .fold(EmoteSize::OneX, |acc, h| {
-                            h.static_name
-                                .parse::<EmoteSize>()
-                                .map(|m| m.max(acc))
-                                .unwrap_or(acc)
-                        });
+                        .iter()
+                        .find_map(find_size(EmoteSize::OneX));
+                    let two_x = e
+                        .data
+                        .host
+                        .files
+                        .iter()
+                        .find_map(find_size(EmoteSize::TwoX));
+                    let three_x = e
+                        .data
+                        .host
+                        .files
+                        .iter()
+                        .find_map(find_size(EmoteSize::ThreeX));
+                    let four_x = e
+                        .data
+                        .host
+                        .files
+                        .iter()
+                        .find_map(find_size(EmoteSize::FourX));
+
                     ChannelEmote {
-                        image: Arc::new(self.lazy_emote(e.id, EmoteSize::OneX)),
+                        images: Arc::new(EmoteImages {
+                            one_x: one_x
+                                .unwrap_or((self.lazy_emote(e.id, EmoteSize::OneX), (32, 32))),
+                            two_x,
+                            three_x,
+                            four_x,
+                        }),
                         alias: Some(e.name),
                         metadata: Arc::new(EmoteMetadata {
                             original_name: e.data.name,
