@@ -6,7 +6,7 @@ use std::sync::{
 use futures::{SinkExt, Stream, StreamExt, TryFutureExt, channel::mpsc::UnboundedSender};
 use iced::{
     Alignment, Color, Element, Length, Subscription, Task, Theme, stream,
-    widget::{container, opaque, space},
+    widget::{Button, Row, column, container, opaque, space},
     window,
 };
 use indexmap::IndexMap;
@@ -62,6 +62,7 @@ struct Juliarino {
 
     join_window: Option<JoinPopup>,
     channels: IndexMap<String, Chat>,
+    show_config: bool,
     config: ConfigUi,
     title_bar: TitleBar,
 }
@@ -75,7 +76,9 @@ enum Message {
         login: String,
         id: String,
     },
+
     IrcConnected(UnboundedSender<IrcCommand>),
+
     /// Close button on a tab was closed
     TabClosed(String),
     /// A tab open request was made for the given channel
@@ -89,6 +92,7 @@ enum Message {
     NewMessage(PrivMsg),
     RecentMessagesLoaded(String, Vec<IrcMessage>),
     /// Message for [components::join_popup::JoinPopup]
+    ToggleSettings,
     JoinPopupMessage(join_popup::Message),
     /// Message for [chat::Chat]
     ChatMessage(String, chat::Message),
@@ -114,6 +118,7 @@ impl Juliarino {
             join_window: None,
             seventv_client: Arc::new(SevenTvClient::new()),
             channels: chats,
+            show_config: false,
             config: ConfigUi::new(),
             irc_command: None,
             title_bar: TitleBar::new("Juliarino", main_window),
@@ -259,6 +264,9 @@ impl Juliarino {
 
                 return Task::batch([stv_task, recent_task]);
             }
+            Message::ToggleSettings => {
+                self.show_config = !self.show_config;
+            }
             Message::JoinPopupMessage(m) => {
                 if let Some(p) = &mut self.join_window {
                     return p.update(m).discard();
@@ -313,11 +321,16 @@ impl Juliarino {
             span.finish();
             (c.clone(), view)
         });
-        let tabs = Tabs::new(tabs)
-            .id(self.tabs_id.clone())
-            .on_close(Message::TabClosed)
-            .on_add(Message::OpenJoin)
-            .fallback(self.config.view().map(Message::ConfigMessage));
+
+        let main: Element<'_, Message> = if self.show_config {
+            self.config.view().map(Message::ConfigMessage)
+        } else {
+            Tabs::new(tabs)
+                .id(self.tabs_id.clone())
+                .on_close(Message::TabClosed)
+                .on_add(Message::OpenJoin)
+                .into()
+        };
 
         let popup: Element<'_, Message> = self
             .join_window
@@ -340,7 +353,14 @@ impl Juliarino {
             })
             .unwrap_or_else(|| space().into());
 
-        iced::widget::stack!(tabs, popup).into()
+        // let status_bar = Row::new()
+        //     .push(Button::new("Settings").on_press(Message::ToggleSettings))
+        //     .height(24)
+        //     .width(Length::Fill);
+
+        // let view = column![main, status_bar];
+        let view = main;
+        iced::widget::stack!(view, popup).into()
     }
 }
 

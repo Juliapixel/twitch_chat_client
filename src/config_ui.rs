@@ -1,13 +1,12 @@
 use iced::{
     Element, Length, Padding,
-    widget::{Button, button, checkbox, column, row},
+    widget::{Button, Container, Text, button, checkbox, column, row},
 };
 
-use crate::config::CONFIG;
+use crate::config::{CONFIG, Config};
 
 pub struct ConfigUi {
     active_tab: Tab,
-    natural_scrolling: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -16,11 +15,33 @@ pub enum Tab {
     General,
     Highlights,
     Sounds,
+    About,
 }
 
-#[derive(Debug, Clone)]
+#[derive(derive_more::Debug)]
 pub enum Message {
     SwitchTo(Tab),
+    #[debug("Box<dyn ConfigChanger>")]
+    Execute(Box<dyn ConfigChanger>),
+}
+
+pub trait ConfigChanger: Fn(&mut Config) + Send {
+    fn clone_boxed(&self) -> Box<dyn ConfigChanger>;
+}
+
+impl<T: Fn(&mut Config) + Clone + Send + 'static> ConfigChanger for T {
+    fn clone_boxed(&self) -> Box<dyn ConfigChanger> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Message {
+    fn clone(&self) -> Self {
+        match self {
+            Self::SwitchTo(arg0) => Self::SwitchTo(arg0.clone()),
+            Self::Execute(arg0) => Self::Execute(arg0.clone_boxed()),
+        }
+    }
 }
 
 fn tab(text: &'static str, tab: Tab) -> Element<'static, Message> {
@@ -34,39 +55,53 @@ fn tab(text: &'static str, tab: Tab) -> Element<'static, Message> {
 
 impl ConfigUi {
     pub fn new() -> Self {
-        let config = CONFIG.read();
         Self {
             active_tab: Default::default(),
-            natural_scrolling: config.ui.natural_scrolling,
         }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
+        let cfg = CONFIG.read();
+
         let sections = row![
             tab("General", Tab::General),
             tab("Highlights", Tab::Highlights),
             tab("Sounds", Tab::Sounds),
+            tab("About", Tab::About),
         ]
         .spacing(4)
         .width(Length::FillPortion(1))
         .wrap();
-        let view = match self.active_tab {
-            Tab::General => column![checkbox(self.natural_scrolling).label("Natural scrolling: ")],
-            Tab::Highlights => column![],
-            Tab::Sounds => column![],
-        }
-        .width(Length::FillPortion(3));
-        row![sections, view].width(Length::Fill).into()
+        let view: Element<'_, Message> = match self.active_tab {
+            Tab::General => column![
+                checkbox(cfg.ui.natural_scrolling)
+                    .label("Natural scrolling")
+                    .on_toggle(|l| Message::Execute(Box::new(move |c| {
+                        c.ui.natural_scrolling = l
+                    })))
+            ]
+            .into(),
+            Tab::Highlights => column![].into(),
+            Tab::Sounds => column![].into(),
+            Tab::About => Element::new(Text::new("FART").size(200)),
+        };
+        let view = Container::new(view).width(Length::FillPortion(3));
+        row![sections, view]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     pub fn update(&mut self, msg: Message) {
         match msg {
             Message::SwitchTo(tab) => self.active_tab = tab,
+            Message::Execute(f) => {
+                let mut cfg = CONFIG.write();
+                f(&mut cfg);
+                if let Err(e) = cfg.save() {
+                    log::error!("Error when saving settings: {e}");
+                }
+            }
         };
-        let mut config = CONFIG.write();
-        config.ui.natural_scrolling = self.natural_scrolling;
-        if let Err(e) = config.save() {
-            log::error!("Error saving config file: {e}");
-        }
     }
 }

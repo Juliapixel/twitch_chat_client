@@ -17,6 +17,7 @@ use twixel_core::irc_message::{AnySemantic, PrivMsg, tags::OwnedTag};
 
 use crate::{
     IMAGE_GENERATION,
+    config::CONFIG,
     platform::{
         ChannelEmote,
         twitch::{self, badges::BADGE_CACHE},
@@ -142,6 +143,7 @@ impl Chat {
                         *key,
                     )
                 }))
+                .natural_scrolling(CONFIG.read().ui.natural_scrolling)
                 .on_scroll(Message::ChatScrolled)
                 .width(Length::Fill)
                 .height(Length::Fill)
