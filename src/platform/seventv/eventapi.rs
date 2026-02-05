@@ -169,8 +169,6 @@ impl EventApiClient {
         });
         Self { handle, tx }
     }
-
-    // pub fn
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use std::sync::{
 use futures::{SinkExt, Stream, StreamExt, TryFutureExt, channel::mpsc::UnboundedSender};
 use iced::{
     Alignment, Color, Element, Length, Subscription, Task, Theme, stream,
-    widget::{Button, Row, column, container, opaque, space},
+    widget::{container, opaque, space},
     window,
 };
 use indexmap::IndexMap;

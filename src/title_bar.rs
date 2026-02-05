@@ -1,8 +1,8 @@
 use std::sync::LazyLock;
 
 use iced::{
-    Alignment, Border, Color, Element, Length, Padding, Point, Shadow, Task,
-    widget::{Button, Text, button, container, mouse_area, row, svg},
+    Alignment, Color, Element, Length, Padding, Point, Task,
+    widget::{Text, container, mouse_area, row, svg},
     window,
 };
 
