@@ -175,7 +175,7 @@ impl FfzClient {
                             original_name: e.name,
                             flags: EmoteFlags::empty(),
                             id: e.id.to_string(),
-                            platform: crate::platform::EmotePlatform::BetterTtv,
+                            platform: crate::platform::EmotePlatform::FrankerFaceZ,
                         }),
                         alias: None,
                     }
