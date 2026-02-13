@@ -334,6 +334,13 @@ where
     ) {
         let state = tree.state.downcast_ref::<State<K>>();
         let bounds = layout.bounds();
+
+        let viewport = Rectangle {
+            x: bounds.x,
+            y: bounds.y + state.translation,
+            ..bounds
+        };
+
         renderer.with_layer(bounds, |r| {
             r.with_translation([0.0, -state.translation].into(), |r| {
                 let cursor = match cursor {
@@ -351,19 +358,14 @@ where
                     .zip(tree.children.iter())
                     .zip(layout.children())
                 {
-                    c.as_widget().draw(
-                        t,
-                        r,
-                        theme,
-                        style,
-                        l,
-                        cursor,
-                        &Rectangle {
-                            x: bounds.x,
-                            y: bounds.y + state.translation,
-                            ..bounds
-                        },
-                    );
+                    let b = l.bounds();
+                    if b.y + b.height < viewport.y {
+                        continue;
+                    }
+                    if b.y > viewport.y + viewport.height {
+                        break;
+                    }
+                    c.as_widget().draw(t, r, theme, style, l, cursor, &viewport);
                 }
             });
         });

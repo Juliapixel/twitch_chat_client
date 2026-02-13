@@ -9,6 +9,8 @@ use iced::{
 
 use crate::widget::animated::AnimatedImage;
 
+pub mod betterttv;
+pub mod frankerfacez;
 pub mod recent_messages;
 pub mod seventv;
 pub mod twitch;

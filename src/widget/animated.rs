@@ -100,27 +100,15 @@ impl AnimatedImage {
         }
     }
 
-    // pub fn from_frames(frames: Vec<Frame>) -> Result<Self, AnimatedImageError> {
-    //     let first: Frame = frames.next().ok_or(AnimatedImageError::NotEnoughFrames)??;
-    //     let iced::advanced::image::Handle::Rgba { width, height, .. } = first.handle else {
-    //         panic!("Expecint RGBA data frame")
-    //     };
-    //     let frames: Vec<Frame> = frames.filter_map(|f| f.ok()).collect();
+    pub fn width(mut self, width: impl Into<Length>) -> Self {
+        self.width = width.into();
+        self
+    }
 
-    //     let mut duration = first.delay;
-    //     duration = frames
-    //         .iter()
-    //         .map(|f| f.delay)
-    //         .fold(duration, |acc, b| acc + b);
-    //     Self {
-    //         first,
-    //         frames,
-    //         width: Length::Fixed(width as f32),
-    //         height: Length::Shrink,
-    //         duration,
-    //         aspect_ratio: width as f32 / height as f32,
-    //     }
-    // }
+    pub fn height(mut self, height: impl Into<Length>) -> Self {
+        self.height = height.into();
+        self
+    }
 
     fn from_animation_decoder<'a, D: image::AnimationDecoder<'a>>(
         dec: D,

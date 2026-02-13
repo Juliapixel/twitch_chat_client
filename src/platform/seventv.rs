@@ -145,7 +145,7 @@ impl SevenTvClient {
         let cache = moka::future::CacheBuilder::new(300)
             .eviction_policy(EvictionPolicy::tiny_lfu())
             .time_to_idle(Duration::from_secs(60 * 30))
-            .name("badges")
+            .name("seventv_emotes")
             .build();
         Self {
             client,

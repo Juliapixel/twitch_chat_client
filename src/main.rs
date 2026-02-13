@@ -24,6 +24,8 @@ use crate::{
     config_ui::ConfigUi,
     operation::switch_to_tab,
     platform::{
+        betterttv::BetterTtvClient,
+        frankerfacez::FfzClient,
         recent_messages::get_recent_messages,
         seventv::SevenTvClient,
         twitch::{self, badges::load_badge},
@@ -59,6 +61,8 @@ struct Juliarino {
     irc_command: Option<UnboundedSender<IrcCommand>>,
 
     seventv_client: Arc<SevenTvClient>,
+    bttv_client: Arc<BetterTtvClient>,
+    ffz_client: Arc<FfzClient>,
 
     join_window: Option<JoinPopup>,
     channels: IndexMap<String, Chat>,
@@ -75,6 +79,13 @@ enum Message {
     ChannelSevenTvDataLoaded {
         login: String,
         id: String,
+    },
+    ChannelBttvDataLoaded {
+        login: String,
+        id: String,
+    },
+    ChannelFfzDataLoaded {
+        login: String,
     },
 
     IrcConnected(UnboundedSender<IrcCommand>),
@@ -117,6 +128,8 @@ impl Juliarino {
             tabs_id: iced::widget::Id::unique(),
             join_window: None,
             seventv_client: Arc::new(SevenTvClient::new()),
+            bttv_client: Arc::new(BetterTtvClient::new()),
+            ffz_client: Arc::new(FfzClient::new()),
             channels: chats,
             show_config: false,
             config: ConfigUi::new(),
@@ -184,7 +197,7 @@ impl Juliarino {
                     .emotes()
                     .map(|e| Task::future(twitch::emotes::load_emote(e.0.to_owned())));
 
-                if chat.messages.len() > 500 {
+                while chat.messages.len() >= 500 {
                     chat.messages.pop_front();
                 }
                 let task = Task::batch(badge_tasks.chain(emote_tasks)).then(|r| {
@@ -231,8 +244,10 @@ impl Juliarino {
             }
             Message::ChannelJoined(chan) => {
                 let stv = self.seventv_client.clone();
+                let bttv = self.bttv_client.clone();
+                let ffz = self.ffz_client.clone();
                 let chan2 = chan.clone();
-                let stv_task = Task::future(async move {
+                let emotes_task = Task::future(async move {
                     let data =
                         reqwest::get(format!("https://api.ivr.fi/v2/twitch/user?login={}", &chan))
                             .and_then(|r| r.json::<serde_json::Value>())
@@ -240,20 +255,40 @@ impl Juliarino {
                             .await;
 
                     if let Some(id) = data.ok().as_ref().and_then(|d| d[0]["id"].as_str()) {
-                        (
-                            chan,
-                            id.to_owned(),
-                            stv.load_channel_emote_set(id.to_owned()).await,
+                        let (stve, bttve, ffze) = futures::future::join3(
+                            stv.load_channel_emote_set(id.to_owned()),
+                            bttv.load_channel_emote_set(id.to_owned()),
+                            ffz.load_channel_emote_set_login(chan.clone()),
                         )
+                        .await;
+                        (chan, id.to_owned(), stve, bttve, ffze)
                     } else {
-                        (chan, "".into(), false)
+                        (chan, "".into(), false, false, false)
                     }
                 })
-                .then(|(c, id, f)| {
-                    if f {
-                        Task::done(Message::ChannelSevenTvDataLoaded { login: c, id })
+                .then(|(c, id, s, b, f)| {
+                    let task = if s {
+                        Task::done(Message::ChannelSevenTvDataLoaded {
+                            login: c.clone(),
+                            id: id.clone(),
+                        })
                     } else {
                         Task::none()
+                    };
+                    let task = if b {
+                        task.chain(Task::done(Message::ChannelBttvDataLoaded {
+                            login: c.clone(),
+                            id: id.clone(),
+                        }))
+                    } else {
+                        task
+                    };
+                    if f {
+                        task.chain(Task::done(Message::ChannelFfzDataLoaded {
+                            login: c.clone(),
+                        }))
+                    } else {
+                        task
                     }
                 });
 
@@ -262,7 +297,7 @@ impl Juliarino {
                     Message::RecentMessagesLoaded(chan2, msgs)
                 });
 
-                return Task::batch([stv_task, recent_task]);
+                return Task::batch([emotes_task, recent_task]);
             }
             Message::ToggleSettings => {
                 self.show_config = !self.show_config;
@@ -296,6 +331,30 @@ impl Juliarino {
                 if let (Some(chan), Some(emotes)) = (
                     self.channels.get_mut(&login),
                     self.seventv_client.channel_emote_set(&id),
+                ) {
+                    chan.emotes
+                        .extend(emotes.iter().map(|e| (e.text_name().to_owned(), e.clone())));
+                    return chan
+                        .update(chat::Message::EmoteSetsLoaded)
+                        .map(move |m| Message::ChatMessage(login.clone(), m));
+                }
+            }
+            Message::ChannelBttvDataLoaded { login, id } => {
+                if let (Some(chan), Some(emotes)) = (
+                    self.channels.get_mut(&login),
+                    self.bttv_client.channel_emote_set(&id),
+                ) {
+                    chan.emotes
+                        .extend(emotes.iter().map(|e| (e.text_name().to_owned(), e.clone())));
+                    return chan
+                        .update(chat::Message::EmoteSetsLoaded)
+                        .map(move |m| Message::ChatMessage(login.clone(), m));
+                }
+            }
+            Message::ChannelFfzDataLoaded { login } => {
+                if let (Some(chan), Some(emotes)) = (
+                    self.channels.get_mut(&login),
+                    self.ffz_client.channel_emote_set_login(&login),
                 ) {
                     chan.emotes
                         .extend(emotes.iter().map(|e| (e.text_name().to_owned(), e.clone())));

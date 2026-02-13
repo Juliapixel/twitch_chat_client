@@ -212,7 +212,7 @@ impl Chat {
 
         let [r, g, b] = msg.get_color().unwrap_or([96; 3]);
         let mut hsl: palette::Hsl = palette::Srgb::new(r, g, b).into_format().into_color();
-        hsl.lightness = hsl.lightness.max(0.3);
+        hsl.lightness = hsl.lightness.max(0.5);
         let (r, g, b) = palette::Srgb::from_color(hsl)
             .into_format()
             .into_components();
