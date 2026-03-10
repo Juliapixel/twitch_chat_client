@@ -6,11 +6,13 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
     {
       self,
+      crane,
       nixpkgs,
       fenix,
       flake-utils,
@@ -39,6 +41,43 @@
             libxkbcommon
           ]
         );
+
+        craneLib = crane.mkLib pkgs;
+
+        commonArgs = {
+          src = ./.;
+          strictDeps = true;
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        };
+
+        manifest = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+
+        juliarino =
+          (
+            craneLib.buildPackage commonArgs
+            // {
+              pname = manifest.package.name;
+              name = manifest.package.name;
+              version = manifest.package.version;
+
+              meta = {
+                description = "A native Twitch chat client written in Rust";
+                license = pkgs.lib.licenses.mit;
+              };
+            }
+          ).overrideAttrs
+            (
+              final: prev: {
+                nativeBuildInputs =
+                  prev.nativeBuildInputs
+                  ++ (with pkgs; [
+                    makeWrapper
+                  ]);
+                postInstall = ''
+                  wrapProgram $out/bin/${manifest.package.name} --set LD_LIBRARY_PATH ${ld_library_path}
+                '';
+              }
+            );
       in
       {
         devShells.default = pkgs.mkShell {
@@ -49,36 +88,7 @@
           LD_LIBRARY_PATH = ld_library_path;
         };
 
-        packages.default = pkgs.rustPlatform.buildRustPackage (
-          let
-            manifest = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-          in
-          {
-            pname = manifest.package.name;
-            name = manifest.package.name;
-            version = manifest.package.version;
-
-            src = ./.;
-
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              allowBuiltinFetchGit = true;
-            };
-
-            nativeBuildInputs = with pkgs; [
-              makeWrapper
-            ];
-
-            postInstall = ''
-              wrapProgram $out/bin/${manifest.package.name} --set LD_LIBRARY_PATH ${ld_library_path}
-            '';
-
-            meta = {
-              description = "A native Twitch chat client written in Rust";
-              license = pkgs.lib.licenses.mit;
-            };
-          }
-        );
+        packages.default = juliarino;
       }
     );
 }
