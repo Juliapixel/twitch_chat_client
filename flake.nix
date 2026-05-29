@@ -47,8 +47,8 @@
         commonArgs = {
           src = ./.;
           strictDeps = true;
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         };
+        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
         manifest = builtins.fromTOML (builtins.readFile ./Cargo.toml);
 
@@ -56,9 +56,7 @@
           (
             craneLib.buildPackage commonArgs
             // {
-              pname = manifest.package.name;
-              name = manifest.package.name;
-              version = manifest.package.version;
+              inherit cargoArtifacts;
 
               meta = {
                 description = "A native Twitch chat client written in Rust";
